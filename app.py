@@ -1600,6 +1600,7 @@ else:
                 
                 vix_val = risk_data.get("^VIX", {}).get("price", 15.0)
                 vix_chg = risk_data.get("^VIX", {}).get("change", 0.0)
+                usd_val = risk_data.get("USDKRW=X", {}).get("price", 1350.0)
                 if vix_val >= 30.0:
                     vix_state = "🚨 극도 공포 (Extreme Fear)"
                     vix_color = "#FF4B4B"
