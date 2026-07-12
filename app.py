@@ -1272,17 +1272,37 @@ else:
         st.markdown("### 📝 실시간 보유 주식 정보 입력")
         st.info("💡 아래 테이블을 더블클릭하여 내 주식의 '티커(예: AAPL)', '평단가', '보유 수량'을 수정하거나 아래 행을 추가/삭제하여 나만의 자산을 등록하세요. 왼쪽 사이드바의 [실시간 티커 검색기]를 통해 정확한 티커 알파벳을 복사해 기입하실 수 있습니다.")
         
-        # 기본 보유 포트폴리오 테이블 뼈대 (DB 데이터가 존재 시 복원하고, 없을 경우에만 예시 표 노출)
+        # 기본 보유 포트폴리오 테이블 뼈대 및 현금 분리 로드 가로채기
         if 'my_portfolio_data' not in st.session_state:
             db_port = auth.get_user_portfolio(st.session_state['username'])
+            
+            # 현금 기본값 초기화
+            st.session_state['cash_krw_val'] = 0.0
+            st.session_state['cash_usd_val'] = 0.0
+            
             if db_port:
-                st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
+                # _CASH_KRW_, _CASH_USD_ 티커 분리
+                stock_list = []
+                for p in db_port:
+                    if p["티커"] == "_CASH_KRW_":
+                        st.session_state['cash_krw_val'] = float(p["보유 수량"])
+                    elif p["티커"] == "_CASH_USD_":
+                        st.session_state['cash_usd_val'] = float(p["보유 수량"])
+                    else:
+                        stock_list.append(p)
+                st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
             else:
                 st.session_state['my_portfolio_data'] = pd.DataFrame([
                     {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
                     {"티커": "NVDA", "매수 평단가": 100.0, "보유 수량": 25.0},
                     {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
                 ])
+        
+        # 세션 리셋 방지용 현금 변수 바인딩
+        if 'cash_krw_val' not in st.session_state:
+            st.session_state['cash_krw_val'] = 0.0
+        if 'cash_usd_val' not in st.session_state:
+            st.session_state['cash_usd_val'] = 0.0
             
         # 💡 st.data_editor에 on_change 콜백(sync_editor_data)을 직접 적용하여 Rerun 시 숫자 유실 현상 차단
         edited_df = st.data_editor(
@@ -1298,6 +1318,36 @@ else:
             on_change=sync_editor_data  # 실시간 상태 보존 콜백 엔진 연동!
         )
         
+        # 💵 보유 현금 자산 간편 설정 패널 배치 (USD/KRW 칸 하나만 노출)
+        st.markdown("<div style='margin-top: -0.5rem; margin-bottom: 0.5rem;'><b>💵 보유 현금 자산 간편 설정</b></div>", unsafe_allow_html=True)
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            cash_krw_input = st.number_input("원화 현금 잔고 (₩)", min_value=0.0, step=10000.0, value=float(st.session_state['cash_krw_val']), format="%.f")
+        with col_c2:
+            cash_usd_input = st.number_input("달러 현금 잔고 ($)", min_value=0.0, step=10.0, value=float(st.session_state['cash_usd_val']), format="%.f")
+            
+        # 값 수정 시 세션 동기화 및 DB 저장 통합
+        if cash_krw_input != st.session_state['cash_krw_val'] or cash_usd_input != st.session_state['cash_usd_val']:
+            st.session_state['cash_krw_val'] = cash_krw_input
+            st.session_state['cash_usd_val'] = cash_usd_input
+            
+            # 주식 리스트와 결합하여 강제 영구 저장
+            combined_to_save = []
+            # 에디터 내 데이터
+            for _, r in st.session_state['my_portfolio_data'].iterrows():
+                combined_to_save.append({
+                    "티커": str(r["티커"]).strip().upper(),
+                    "매수 평단가": float(r["매수 평단가"]),
+                    "보유 수량": float(r["보유 수량"])
+                })
+            # 현금 데이터 추가
+            if cash_krw_input > 0:
+                combined_to_save.append({"티커": "_CASH_KRW_", "매수 평단가": 1.0, "보유 수량": cash_krw_input})
+            if cash_usd_input > 0:
+                combined_to_save.append({"티커": "_CASH_USD_", "매수 평단가": 1.0, "보유 수량": cash_usd_input})
+                
+            auth.save_user_portfolio(st.session_state['username'], combined_to_save)
+        
         # 콜백이 실행되어 세션 값이 바뀐 후 화면 렌더링에 사용할 임시 DF 매핑
         df_for_calc = st.session_state['my_portfolio_data']
         
@@ -1308,7 +1358,24 @@ else:
         if calc_run or 'calc_run_state' not in st.session_state:
             st.session_state['calc_run_state'] = True
             
-            df_valid = df_for_calc.dropna(subset=["티커", "매수 평단가", "보유 수량"])
+            # 💡 현금성 티커(CASH, USD, KRW) 입력 시 수량이나 평단가 중 하나만 채워도 복구해 주는 보간 장치
+            df_cleaned = df_for_calc.copy()
+            for idx, r in df_cleaned.iterrows():
+                t_val = str(r.get("티커", "")).strip().upper()
+                if t_val in ["CASH", "USD", "KRW"]:
+                    p_raw = r.get("매수 평단가")
+                    s_raw = r.get("보유 수량")
+                    if pd.isna(p_raw) and pd.isna(s_raw):
+                        df_cleaned.at[idx, "매수 평단가"] = 0.0
+                        df_cleaned.at[idx, "보유 수량"] = 0.0
+                    elif pd.isna(p_raw) or p_raw is None:
+                        df_cleaned.at[idx, "매수 평단가"] = 1.0
+                        df_cleaned.at[idx, "보유 수량"] = float(s_raw) if s_raw is not None else 0.0
+                    elif pd.isna(s_raw) or s_raw is None:
+                        df_cleaned.at[idx, "매수 평단가"] = 1.0
+                        df_cleaned.at[idx, "보유 수량"] = float(p_raw) if p_raw is not None else 0.0
+                        
+            df_valid = df_cleaned.dropna(subset=["티커", "매수 평단가", "보유 수량"])
             df_valid = df_valid[df_valid["티커"].str.strip() != ""]
             
             if df_valid.empty:
@@ -1369,6 +1436,47 @@ else:
                     if has_error:
                         st.error(f"티커 '{error_ticker}'의 실시간 시세를 가져오는데 실패했습니다. 올바른 해외/국내 주식 티커인지 다시 확인해 주세요.")
                     else:
+                        # 💵 환율 구하기 (달러 현금의 원화 환산용)
+                        usd_krw_rate = 1350.0
+                        try:
+                            rate_df = yf.download("USDKRW=X", period="1d", progress=False)
+                            if not rate_df.empty:
+                                if isinstance(rate_df.columns, pd.MultiIndex):
+                                    rate_df.columns = rate_df.columns.get_level_values(0)
+                                usd_krw_rate = float(rate_df['Close'].iloc[-1])
+                        except Exception:
+                            pass
+                            
+                        # 간편 현금 자산 추가 연동
+                        if cash_krw_input > 0:
+                            results.append({
+                                "티커": "CASH (₩)",
+                                "평단가": 1.0,
+                                "현재가": 1.0,
+                                "보유수량": cash_krw_input,
+                                "매입금액": cash_krw_input,
+                                "평가금액": cash_krw_input,
+                                "평가손익": 0.0,
+                                "수익률": 0.0
+                            })
+                            total_buy_value += cash_krw_input
+                            total_eval_value += cash_krw_input
+                            
+                        if cash_usd_input > 0:
+                            usd_in_krw = cash_usd_input * usd_krw_rate
+                            results.append({
+                                "티커": "CASH ($)",
+                                "평단가": usd_krw_rate,
+                                "현재가": usd_krw_rate,
+                                "보유수량": cash_usd_input,
+                                "매입금액": usd_in_krw,
+                                "평가금액": usd_in_krw,
+                                "평가손익": 0.0,
+                                "수익률": 0.0
+                            })
+                            total_buy_value += usd_in_krw
+                            total_eval_value += usd_in_krw
+                            
                         df_res = pd.DataFrame(results)
                         
                         total_profit = total_eval_value - total_buy_value
@@ -1541,30 +1649,54 @@ else:
                             })
                             
                             # 2-2. 안전 쿠션 방어막 비율 (Safe Cushion Ratio) 정밀 진단
-                            # 배당주(SCHD, JEPI) 및 리츠(O) 등 주식형 고위험 자산은 쿠션에서 완전히 퇴출, 진정한 안전 쿠션(국채, 금, 초단기채)만 집계
+                            # 1. 절대 안전 자산 (현금, 국채, 금)
                             cushion_tickers = ["TLT", "IEF", "SHY", "EDV", "BIL", "SHV", "GLD", "IAU"]
-                            cushion_sum = 0.0
+                            
+                            # 2. 배당 및 경기 방어주 (고배당주, 리츠, 필수소비재, 헬스케어, 유틸리티 등)
+                            defensive_tickers = ["SCHD", "JEPI", "JEPQ", "O", "SPYD", "VYM", "VNQ", "XLP", "XLV", "XLU", "KO", "PEP", "PG", "JNJ", "LLY", "UNH", "WMT", "MCD"]
+                            
+                            absolute_safe_sum = 0.0
+                            defensive_sum = 0.0
+                            
+                            detected_safe_list = []
+                            detected_defensive_list = []
+                            
                             for _, r in df_res.iterrows():
                                 ticker_upper = r["티커"].upper()
-                                # 채권, 국채, 금, 현금 키워드 매핑 또는 지정 안전 자산 포함 여부 확인
-                                if any(x in ticker_upper for x in cushion_tickers) or any(keyword in ticker_upper for keyword in ["채권", "국채", "현금", "GOLD", "금"]):
-                                    cushion_sum += r["평가금액"]
+                                ratio = (r["평가금액"] / total_eval_value) * 100
+                                
+                                # 절대 안전 자산 매핑 (채권, 국채, 금, 현금, CASH)
+                                if any(x in ticker_upper for x in cushion_tickers) or any(keyword in ticker_upper for keyword in ["채권", "국채", "현금", "GOLD", "금", "CASH"]):
+                                    absolute_safe_sum += r["평가금액"]
+                                    detected_safe_list.append(f"{ticker_upper} ({ratio:.1f}%)")
+                                # 배당 및 경기 방어주 매핑 (고배당, 리츠, 필수소비재, 헬스케어 등)
+                                elif any(x in ticker_upper for x in defensive_tickers) or any(keyword in ticker_upper for keyword in ["배당", "리츠", "우선주", "헬스케어", "통신", "유틸리티"]):
+                                    defensive_sum += r["평가금액"]
+                                    detected_defensive_list.append(f"{ticker_upper} ({ratio:.1f}%)")
                                     
-                            cushion_pct = (cushion_sum / total_eval_value) * 100
+                            cushion_pct = (absolute_safe_sum / total_eval_value) * 100
+                            defensive_pct = (defensive_sum / total_eval_value) * 100
+                            total_defensive_pct = cushion_pct + defensive_pct
                             
-                            if cushion_pct >= 30.0:
+                            safe_assets_str = ", ".join(detected_safe_list) if detected_safe_list else "없음"
+                            defensive_assets_str = ", ".join(detected_defensive_list) if detected_defensive_list else "없음"
+                            
+                            if total_defensive_pct >= 45.0:
                                 cushion_status = "🟢 철벽 방어막 가동 (위기 대응력 최상)"
-                                cushion_desc = f"전체 자산 중 **{cushion_pct:.1f}%**가 채권, 금, 현금 등 진정한 안전자산으로 탄탄하게 구성되어 있습니다. 주식 시장 대폭락 국면에서도 계좌 하방을 강력하게 지탱해 주며, 저가 매수에 가용한 탄환이 풍족한 상태입니다."
+                                cushion_desc = f"전체 자산 중 **{total_defensive_pct:.1f}%** (절대안전 {cushion_pct:.1f}% + 방어성 {defensive_pct:.1f}%)가 완충 자산으로 구성되어 있습니다. 시장 대폭락 국면에서도 계좌 하방을 강력하게 지탱해 줍니다."
                                 cushion_color = "#10B981"
-                            elif cushion_pct >= 15.0:
+                            elif total_defensive_pct >= 20.0:
                                 cushion_status = "🟡 방어력 보통 (최소 완충막 구비)"
-                                cushion_desc = f"전체 자산 중 **{cushion_pct:.1f}%**가 채권 및 금 등의 안전자산으로 이루어져 있습니다. 마켓의 단기 충격을 어느 정도 제어해주지만, 블랙 스완급 시스템 위기에 맞설 방어력을 더 확보하기 위해 안전 자산 비중을 30% 근처까지 점진적 늘려주는 것을 조언합니다."
+                                cushion_desc = f"전체 자산 중 **{total_defensive_pct:.1f}%** (절대안전 {cushion_pct:.1f}% + 방어성 {defensive_pct:.1f}%)가 완충 자산으로 이루어져 있습니다. 마켓의 충격을 일정 수준 완화해 주지만 더 단단한 위기 대응력을 위해 방어성 비중을 45% 이상으로 증대시키는 것을 추천합니다."
                                 cushion_color = "#F1C40F"
                             else:
                                 cushion_status = "🚨 방어막 부족 (시장 변동성 전면 노출)"
-                                cushion_desc = f"전체 자산 중 안전/완충 자산 비중이 **{cushion_pct:.1f}%**로 극히 미미합니다. 포트폴리오가 주식 시장의 급락세에 그대로 노출되어 폭락 시 큰 충격을 받을 수 있으므로, 최소한의 국채(TLT)나 금(GLD) 자산을 추가 매수하여 안전 쿠션을 보강할 것을 강력 권고합니다."
+                                cushion_desc = f"전체 자산 중 안전/방어성 자산 비중이 **{total_defensive_pct:.1f}%** (절대안전 {cushion_pct:.1f}% + 방어성 {defensive_pct:.1f}%)로 취약합니다. 급락장 발생 시 계좌 낙폭을 고스란히 겪을 수 있으므로 국채나 경기방어성 배당주 비중을 보강할 것을 강력 권고합니다."
                                 cushion_color = "#FF4B4B"
                                 
+                            cushion_desc += f"<br><div style='margin-top: 0.5rem; font-size: 0.88rem; color: #E2E8F0;'>🔍 <b>감지된 절대 안전 자산</b>: {safe_assets_str}</div>"
+                            cushion_desc += f"<div style='margin-top: 0.25rem; font-size: 0.88rem; color: #E2E8F0;'>🛡️ <b>감지된 배당 및 경기 방어주</b>: {defensive_assets_str}</div>"
+                            
                             diagnostics.append({
                                 "type": "cushion",
                                 "color": cushion_color,
