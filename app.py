@@ -1665,12 +1665,21 @@ else:
                                 ticker_upper = r["티커"].upper()
                                 ratio = (r["평가금액"] / total_eval_value) * 100
                                 
-                                # 절대 안전 자산 매핑 (채권, 국채, 금, 현금, CASH)
-                                if any(x in ticker_upper for x in cushion_tickers) or any(keyword in ticker_upper for keyword in ["채권", "국채", "현금", "GOLD", "금", "CASH"]):
+                                # 레버리지 및 인버스 상품은 안전 방어막/경기 방어성 자산에서 무조건 100% 제외 (TMF, TQQQ 등 차단)
+                                is_leverage_or_inverse = False
+                                leverage_inverse_tickers = ["TQQQ", "SOXL", "UPRO", "QLD", "SQQQ", "SOXS", "SDOW", "SRTY", "TMF", "YANG", "YINN", "EDC", "TECL", "TECS", "FAS", "FAZ", "LABU", "LABD", "BULZ"]
+                                if (ticker_upper in leverage_inverse_tickers) or any(k in ticker_upper for k in ["레버", "인버", "곱버", "LEVERAGE", "BEAR", "BULL", "SHORT", "2X", "3X"]):
+                                    is_leverage_or_inverse = True
+                                    
+                                if is_leverage_or_inverse:
+                                    continue
+                                    
+                                # 절대 안전 자산 매핑 (티커 단독 일치 또는 채권/국채/금/현금 키워드 포함)
+                                if (ticker_upper in cushion_tickers) or any(keyword in ticker_upper for keyword in ["채권", "국채", "현금", "GOLD", "금", "CASH"]):
                                     absolute_safe_sum += r["평가금액"]
                                     detected_safe_list.append(f"{ticker_upper} ({ratio:.1f}%)")
-                                # 배당 및 경기 방어주 매핑 (고배당, 리츠, 필수소비재, 헬스케어 등)
-                                elif any(x in ticker_upper for x in defensive_tickers) or any(keyword in ticker_upper for keyword in ["배당", "리츠", "우선주", "헬스케어", "통신", "유틸리티"]):
+                                # 배당 및 경기 방어주 매핑 (티커 단독 일치 또는 배당/리츠/우선주/헬스케어/통신/유틸리티 키워드 포함)
+                                elif (ticker_upper in defensive_tickers) or any(keyword in ticker_upper for keyword in ["배당", "리츠", "우선주", "헬스케어", "통신", "유틸리티"]):
                                     defensive_sum += r["평가금액"]
                                     detected_defensive_list.append(f"{ticker_upper} ({ratio:.1f}%)")
                                     
