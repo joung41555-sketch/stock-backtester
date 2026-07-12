@@ -666,14 +666,14 @@ else:
         st.sidebar.subheader("⚙️ 관리자 전용 메뉴")
         admin_mode = st.sidebar.radio(
             "화면 모드 선택",
-            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단", "👥 가입 회원 관리"]
+            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단", "🚨 시장 위험 지표", "👥 가입 회원 관리"]
         )
         st.sidebar.markdown("---")
     else:
         st.sidebar.subheader("📂 메뉴 선택")
         admin_mode = st.sidebar.radio(
             "화면 모드 선택",
-            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단"]
+            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단", "🚨 시장 위험 지표"]
         )
         st.sidebar.markdown("---")
 
