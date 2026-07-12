@@ -106,6 +106,17 @@ def init_db():
         )
     """)
     
+    # 실시간 보유 자산 영구 보관 테이블 생성 (계정별 고유 자산)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_portfolios (
+            username TEXT,
+            ticker TEXT,
+            buy_price REAL,
+            shares REAL,
+            PRIMARY KEY (username, ticker)
+        )
+    """)
+    
     # 이메일 컬럼(email)이 존재하는지 확인하고 없으면 자동 생성 (마이그레이션)
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
@@ -383,6 +394,60 @@ def destroy_session(token):
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_user_portfolio(username):
+    """유저가 기존에 저장한 실보유 자산 포트폴리오 목록 조회"""
+    init_db()
+    username = username.strip()
+    if not username:
+        return None
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT ticker, buy_price, shares FROM user_portfolios WHERE username = ?", (username,))
+        rows = cursor.fetchall()
+        if not rows:
+            return None
+        return [{"티커": r[0], "매수 평단가": r[1], "보유 수량": r[2]} for r in rows]
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def overwrite_user_portfolio(username, df):
+    """유저의 최신 포트폴리오 상태로 DB에 일괄 덮어쓰기 업데이트"""
+    init_db()
+    username = username.strip()
+    if not username or df is None:
+        return
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # 기존 저장 데이터 삭제
+        cursor.execute("DELETE FROM user_portfolios WHERE username = ?", (username,))
+        
+        # 새 편집본 행 순회 및 저장
+        for _, row in df.iterrows():
+            ticker = str(row.get("티커", "")).strip().upper()
+            if not ticker:
+                 continue
+            try:
+                buy_price = float(row.get("매수 평단가", 0.0))
+                shares = float(row.get("보유 수량", 0.0))
+            except (ValueError, TypeError):
+                continue
+                
+            cursor.execute(
+                "INSERT OR REPLACE INTO user_portfolios (username, ticker, buy_price, shares) VALUES (?, ?, ?, ?)",
+                (username, ticker, buy_price, shares)
+            )
         conn.commit()
     except Exception:
         pass

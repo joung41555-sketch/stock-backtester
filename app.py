@@ -51,6 +51,10 @@ if not st.session_state['logged_in']:
         if verified_username:
             st.session_state['logged_in'] = True
             st.session_state['username'] = verified_username
+            # DB에서 포트폴리오를 로드하여 세션 프레임 복원
+            db_port = auth.get_user_portfolio(verified_username)
+            if db_port:
+                st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
 
 # 커스텀 CSS로 디자인 개선 (유려한 글꼴, 그라데이션 및 카드 스타일, 헤더 감추기)
 st.markdown("""
@@ -423,6 +427,10 @@ def sync_editor_data():
             df = df.drop(index=deleted_indices).reset_index(drop=True)
             
         st.session_state['my_portfolio_data'] = df
+        
+        # SQLite DB에 최신 보유 자산 실시간 영구 동기화
+        if st.session_state.get('username'):
+            auth.overwrite_user_portfolio(st.session_state['username'], df)
 
 
 # =======================================================
@@ -484,6 +492,12 @@ if not st.session_state['logged_in']:
                             
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = login_username
+                        
+                        # DB에서 저장되어 있던 개인 보유 자산 포트폴리오 로딩 복원
+                        db_port = auth.get_user_portfolio(login_username)
+                        if db_port:
+                            st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
+                            
                         st.success("로그인에 성공했습니다! 페이지를 로드 중...")
                         st.rerun()
                     else:
@@ -1169,13 +1183,17 @@ else:
         st.markdown("### 📝 실시간 보유 주식 정보 입력")
         st.info("💡 아래 테이블을 더블클릭하여 내 주식의 '티커(예: AAPL)', '평단가', '보유 수량'을 수정하거나 아래 행을 추가/삭제하여 나만의 자산을 등록하세요. 왼쪽 사이드바의 [실시간 티커 검색기]를 통해 정확한 티커 알파벳을 복사해 기입하실 수 있습니다.")
         
-        # 기본 보유 포트폴리오 테이블 뼈대
+        # 기본 보유 포트폴리오 테이블 뼈대 (DB 데이터가 존재 시 복원하고, 없을 경우에만 예시 표 노출)
         if 'my_portfolio_data' not in st.session_state:
-            st.session_state['my_portfolio_data'] = pd.DataFrame([
-                {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
-                {"티커": "NVDA", "매수 평단가": 100.0, "보유 수량": 25.0},
-                {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
-            ])
+            db_port = auth.get_user_portfolio(st.session_state['username'])
+            if db_port:
+                st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
+            else:
+                st.session_state['my_portfolio_data'] = pd.DataFrame([
+                    {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
+                    {"티커": "NVDA", "매수 평단가": 100.0, "보유 수량": 25.0},
+                    {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
+                ])
             
         # 💡 st.data_editor에 on_change 콜백(sync_editor_data)을 직접 적용하여 Rerun 시 숫자 유실 현상 차단
         edited_df = st.data_editor(
