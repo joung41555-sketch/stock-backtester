@@ -12,14 +12,15 @@ DB_PATH = os.path.join(BASE_DIR, "users.db")
 # 보안 강화를 위한 솔트(Salt) 값 설정
 PASSWORD_SALT = "antigravity-secure-salt-2026!#"
 
-# 실제 이메일 발송을 원하시면 아래 설정을 채워주거나 Streamlit Secrets에 등록해 주세요.
+# 듀얼 SMTP 설정 로딩 (보안 연동)
 try:
-    # 대소문자 구분 없이 모두 지원하도록 유연하게 감지
-    SMTP_USER = st.secrets.get("SMTP_USER") or st.secrets.get("smtp_user") or ""
-    SMTP_PASSWORD = st.secrets.get("SMTP_PASSWORD") or st.secrets.get("smtp_password") or ""
+    GMAIL_USER = st.secrets.get("GMAIL_USER") or st.secrets.get("gmail_user") or ""
+    GMAIL_PASSWORD = st.secrets.get("GMAIL_PASSWORD") or st.secrets.get("gmail_password") or ""
+    
+    NAVER_USER = st.secrets.get("NAVER_USER") or st.secrets.get("naver_user") or ""
+    NAVER_PASSWORD = st.secrets.get("NAVER_PASSWORD") or st.secrets.get("naver_password") or ""
 except Exception:
-    SMTP_USER = ""
-    SMTP_PASSWORD = ""
+    GMAIL_USER = GMAIL_PASSWORD = NAVER_USER = NAVER_PASSWORD = ""
 
 def get_smtp_config(email):
     """이메일 주소 도메인을 분석해 알맞은 SMTP 서버 정보와 포트, SSL 여부를 반환"""
@@ -33,6 +34,51 @@ def get_smtp_config(email):
     else:
         # 기타 기본값은 Gmail 규격으로 적용
         return "smtp.gmail.com", 587, False
+
+def _execute_send_email(smtp_user, smtp_password, to_email, subject, html_body):
+    """특정 SMTP 계정 정보로 메일 발송 처리하는 내부 함수 (포트 및 SSL/TLS 자동 매칭)"""
+    smtp_server, smtp_port, use_ssl = get_smtp_config(smtp_user)
+    msg = MIMEMultipart()
+    msg['From'] = f"Dynamic Stock Backtester <{smtp_user}>"
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_body, 'html'))
+    
+    if use_ssl:
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        server.login(smtp_user, smtp_password)
+    else:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        
+    server.sendmail(smtp_user, to_email, msg.as_string())
+    server.quit()
+
+def dispatch_email(to_email, subject, html_body, demo_fallback_value):
+    """활성화된 모든 SMTP 계정(구글 -> 네이버 순)을 차례로 시도하여 발송 완료 (하나라도 성공 시 성공 리포트)"""
+    senders = []
+    if GMAIL_USER.strip() and GMAIL_PASSWORD.strip():
+        senders.append((GMAIL_USER, GMAIL_PASSWORD))
+    if NAVER_USER.strip() and NAVER_PASSWORD.strip():
+        senders.append((NAVER_USER, NAVER_PASSWORD))
+        
+    # 등록된 발송 계정이 전혀 없는 경우 데모 모드로 폴백
+    if not senders:
+        return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 임시 인증번호는 {demo_fallback_value} 입니다."
+        
+    last_error = ""
+    for user, password in senders:
+        try:
+            _execute_send_email(user, password, to_email, subject, html_body)
+            return True, f"{to_email} 주소로 이메일 안내가 발송되었습니다!"
+        except Exception as e:
+            last_error = f"계정 {user} 발송 실패: {e}"
+            # 이 계정이 실패하면 루프를 돌아 다음 예비 계정으로 즉시 재시도
+            continue
+            
+    # 모든 활성 계정이 발송에 실패한 경우
+    return False, f"등록된 모든 발송 메일 계정의 시도가 실패했습니다. 마지막 오류: {last_error}"
 
 def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션"""
@@ -61,52 +107,24 @@ def hash_password(password):
     return hashlib.sha256(salted.encode('utf-8')).hexdigest()
 
 def send_verification_email(to_email, code):
-    """인증 메일 발송 (SMTP 미설정 시 가상 테스트 모드로 동작)"""
-    if not SMTP_USER.strip() or not SMTP_PASSWORD.strip():
-        # 폴백 데모 모드 (실제 메일을 보내지 않고 코드를 화면에 즉시 노출함)
-        return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 임시 인증번호는 {code} 입니다."
-    
-    try:
-        # 발송인 이메일에 맞춰 SMTP 서버 설정 자동 라우팅
-        smtp_server, smtp_port, use_ssl = get_smtp_config(SMTP_USER)
-        
-        msg = MIMEMultipart()
-        msg['From'] = f"Dynamic Stock Backtester <{SMTP_USER}>"
-        msg['To'] = to_email
-        msg['Subject'] = "[Dynamic Stock Backtester] 회원가입 이메일 인증번호"
-        
-        html_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: #F8FAFC; padding: 20px;">
-            <div style="max-width: 500px; margin: 0 auto; background-color: #1E293B; border-radius: 12px; padding: 30px; border: 1px solid #334155;">
-                <h2 style="color: #FF4B4B; text-align: center;">📈 Dynamic Stock Backtester</h2>
-                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
-                <p>안녕하세요. 서비스 가입을 진행해 주셔서 감사합니다.</p>
-                <p>가입 인증을 완료하기 위해 아래 6자리 인증 코드를 사이트 화면에 입력해 주세요.</p>
-                <div style="background-color: #0F172A; border: 1px solid #FF4B4B; color: #FF4B4B; font-size: 24px; font-weight: 700; padding: 15px; border-radius: 8px; text-align: center; letter-spacing: 5px; margin: 25px 0;">
-                    {code}
-                </div>
-                <p style="font-size: 12px; color: #94A3B8; text-align: center; margin-top: 30px;">본 메일은 시스템 발신 전용 메일입니다.</p>
+    """인증 메일 발송 (듀얼 SMTP 폴백 엔진 적용)"""
+    html_body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: #F8FAFC; padding: 20px;">
+        <div style="max-width: 500px; margin: 0 auto; background-color: #1E293B; border-radius: 12px; padding: 30px; border: 1px solid #334155;">
+            <h2 style="color: #FF4B4B; text-align: center;">📈 Dynamic Stock Backtester</h2>
+            <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
+            <p>안녕하세요. 서비스 가입을 진행해 주셔서 감사합니다.</p>
+            <p>가입 인증을 완료하기 위해 아래 6자리 인증 코드를 사이트 화면에 입력해 주세요.</p>
+            <div style="background-color: #0F172A; border: 1px solid #FF4B4B; color: #FF4B4B; font-size: 24px; font-weight: 700; padding: 15px; border-radius: 8px; text-align: center; letter-spacing: 5px; margin: 25px 0;">
+                {code}
             </div>
-        </body>
-        </html>
-        """
-        msg.attach(MIMEText(html_body, 'html'))
-        
-        # SSL 및 TLS 전송 방식 다변화 연동
-        if use_ssl:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port)
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            
-        server.sendmail(SMTP_USER, to_email, msg.as_string())
-        server.quit()
-        return True, f"{to_email} 주소로 인증번호가 발송되었습니다!"
-    except Exception as e:
-        return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
+            <p style="font-size: 12px; color: #94A3B8; text-align: center; margin-top: 30px;">본 메일은 시스템 발신 전용 메일입니다.</p>
+        </div>
+    </body>
+    </html>
+    """
+    return dispatch_email(to_email, "[Dynamic Stock Backtester] 회원가입 이메일 인증번호", html_body, code)
 
 def register_user(username, password, email):
     """신규 회원가입 처리 (이메일 추가)"""
@@ -220,51 +238,25 @@ def reset_to_temp_password(username, email, temp_password):
         conn.close()
 
 def send_account_info_email(to_email, subject, content_title, content_desc, value_to_highlight):
-    """사용자 계정 정보 안내 메일 발송 (SMTP 미설정 시 가상 테스트 모드로 동작)"""
-    if not SMTP_USER.strip() or not SMTP_PASSWORD.strip():
-        return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 안내 정보: {value_to_highlight}"
-        
-    try:
-        smtp_server, smtp_port, use_ssl = get_smtp_config(SMTP_USER)
-        
-        msg = MIMEMultipart()
-        msg['From'] = f"Dynamic Stock Backtester <{SMTP_USER}>"
-        msg['To'] = to_email
-        msg['Subject'] = f"[Dynamic Stock Backtester] {subject}"
-        
-        html_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: #F8FAFC; padding: 20px;">
-            <div style="max-width: 500px; margin: 0 auto; background-color: #1E293B; border-radius: 12px; padding: 30px; border: 1px solid #334155;">
-                <h2 style="color: #FF4B4B; text-align: center;">📈 Dynamic Stock Backtester</h2>
-                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
-                <p>안녕하세요. 요청하신 계정 찾기 서비스 안내 메일입니다.</p>
-                <p>{content_title}</p>
-                <div style="background-color: #0F172A; border: 1px solid #FF4B4B; color: #FF4B4B; font-size: 20px; font-weight: 700; padding: 15px; border-radius: 8px; text-align: center; margin: 25px 0;">
-                    {value_to_highlight}
-                </div>
-                <p>{content_desc}</p>
-                <p style="font-size: 12px; color: #94A3B8; text-align: center; margin-top: 30px;">본 메일은 시스템 발신 전용 메일입니다.</p>
+    """사용자 계정 정보 안내 메일 발송 (듀얼 SMTP 폴백 엔진 적용)"""
+    html_body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: #F8FAFC; padding: 20px;">
+        <div style="max-width: 500px; margin: 0 auto; background-color: #1E293B; border-radius: 12px; padding: 30px; border: 1px solid #334155;">
+            <h2 style="color: #FF4B4B; text-align: center;">📈 Dynamic Stock Backtester</h2>
+            <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
+            <p>안녕하세요. 요청하신 계정 찾기 서비스 안내 메일입니다.</p>
+            <p>{content_title}</p>
+            <div style="background-color: #0F172A; border: 1px solid #FF4B4B; color: #FF4B4B; font-size: 20px; font-weight: 700; padding: 15px; border-radius: 8px; text-align: center; margin: 25px 0;">
+                {value_to_highlight}
             </div>
-        </body>
-        </html>
-        """
-        msg.attach(MIMEText(html_body, 'html'))
-        
-        # SSL 및 TLS 전송 방식 다변화 연동
-        if use_ssl:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port)
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            
-        server.sendmail(SMTP_USER, to_email, msg.as_string())
-        server.quit()
-        return True, f"{to_email} 주소로 이메일 안내가 발송되었습니다!"
-    except Exception as e:
-        return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
+            <p>{content_desc}</p>
+            <p style="font-size: 12px; color: #94A3B8; text-align: center; margin-top: 30px;">본 메일은 시스템 발신 전용 메일입니다.</p>
+        </div>
+    </body>
+    </html>
+    """
+    return dispatch_email(to_email, f"계정 정보 안내 - {subject}", html_body, value_to_highlight)
 
 def delete_user(username):
     """관리자용: 특정 사용자 계정 삭제(강제 탈퇴) - 공백/대소문자 완벽 무시 매칭"""
