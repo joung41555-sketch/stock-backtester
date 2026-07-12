@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import auth  # 사용자 정의 인증 모듈 임포트
 import portfolio_engine  # MPT 포트폴리오 엔진 임포트
 import ticker_search  # 실시간 티커 검색 자동완성 모듈 임포트
+import risk_profiler  # 구성 자산 고유 위험도 프로파일링 모듈 임포트
 import random
 import string
 
@@ -355,6 +356,12 @@ def render_live_dashboard():
             {"name": "Tesla (TSLA)", "ticker": "TSLA", "currency": "$"},
             {"name": "Alphabet (GOOGL)", "ticker": "GOOGL", "currency": "$"},
             {"name": "Meta (META)", "ticker": "META", "currency": "$"}
+        ],
+        # 그룹 4: 글로벌 주요국 대표 시장 지수 (pt 단위)
+        [
+            {"name": "S&P 500 미국지수", "ticker": "^GSPC", "currency": "pt "},
+            {"name": "코스피 한국지수", "ticker": "^KS11", "currency": "pt "},
+            {"name": "닛케이 225 일본지수", "ticker": "^N225", "currency": "pt "}
         ]
     ]
     
@@ -408,12 +415,18 @@ def sync_editor_data():
     """st.data_editor의 임시 변경 상태를 세션 상태에 즉시 동기화 보존"""
     if 'portfolio_editor' in st.session_state:
         edits = st.session_state.portfolio_editor
+        
+        # 💡 중요: 엔터를 연속해서 누르거나 빈 딕셔너리({}) 상태가 들어올 때, 데이터 오작동 및 덮어쓰기를 방어하기 위해 리턴
+        if not edits.get('edited_rows') and not edits.get('added_rows') and not edits.get('deleted_rows'):
+            return
+            
         df = st.session_state['my_portfolio_data'].copy()
         
         # 1. 수정한 셀(edited_rows) 반영
         for idx, changes in edits.get('edited_rows', {}).items():
             for col, val in changes.items():
-                df.at[idx, col] = val
+                if idx < len(df):
+                    df.at[idx, col] = val
                 
         # 2. 추가된 행(added_rows) 반영
         added_rows = edits.get('added_rows', [])
@@ -1172,6 +1185,38 @@ else:
                         margin=dict(l=40, r=20, t=20, b=40)
                     )
                     st.plotly_chart(scat_fig, use_container_width=True)
+                    
+                    # 🚨 구성 자산별 위험 특성 진단 보고서 (Asset Risk Profiling) 신설
+                    st.markdown("<br><hr>", unsafe_allow_html=True)
+                    st.markdown("### 🚨 구성 자산별 고유 위험 특성 프로파일링 (Asset Risk Profiling)")
+                    st.markdown("포트폴리오에 구성된 개별 자산의 성격(레버리지, 인버스, 암호화폐 등) 및 통계적 변동성을 파악하여 리스크 속성을 점검해 드립니다.")
+                    
+                    found_any_risk = False
+                    for ticker in parsed_tickers:
+                        try:
+                            # 일별 수익률 표준편차의 연율화 변동성 계산
+                            daily_std = df_port[ticker].pct_change().std()
+                            ann_vol = float(daily_std * np.sqrt(252) * 100)
+                        except Exception:
+                            ann_vol = None
+                            
+                        asset_risks = risk_profiler.profile_asset_risk(ticker, ann_vol)
+                        for ar in asset_risks:
+                            found_any_risk = True
+                            st.markdown(f"""
+                                <div class="opt-card" style="border-color: {ar['color']}; margin-bottom: 0.8rem;">
+                                    <div style="font-weight: 800; font-size: 1.05rem; color: #F8FAFC; margin-bottom: 0.4rem;">{ar['title']} ({ar['level']})</div>
+                                    <div style="font-size: 0.9rem; color: #94A3B8; line-height: 1.4;">{ar['desc']}</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                    if not found_any_risk:
+                        st.markdown("""
+                            <div class="opt-card" style="border-color: #10B981; margin-bottom: 0.8rem;">
+                                <div style="font-weight: 800; font-size: 1.05rem; color: #F8FAFC; margin-bottom: 0.4rem;">🟢 포트폴리오 자산 구성 안전성 양호</div>
+                                <div style="font-size: 0.9rem; color: #94A3B8; line-height: 1.4;">포트폴리오 내에 2배/3배 레버리지, 인버스, 암호화폐 연동 자산 등의 고위험 복리 침식 자산이 감지되지 않았습니다. 장기 가치 보존 및 복리 배분에 이상적인 보수적 배분입니다.</div>
+                            </div>
+                        """, unsafe_allow_html=True)
 
     # =======================================================
     #            📊 실시간 보유 자산 트래커 & 위험 진단
@@ -1371,33 +1416,93 @@ else:
                             diagnostics = []
                             num_tickers = len(df_res)
                             
+                            # 1. 포트폴리오 개수 기반 기초 진단
                             if num_tickers <= 2:
                                 diagnostics.append({
                                     "type": "warning",
+                                    "color": "#FF4B4B",
                                     "title": "⚠️ 극심한 자산 집중 위험 감지",
                                     "desc": f"현재 보유 종목 수({num_tickers}개)가 너무 적어 특정 기업의 개별 악재(어닝 쇼크 등) 시 포트폴리오 전체가 큰 충격을 받습니다. 최소 3~5개 이상의 상관관계가 낮은 종목이나 시장 지수 ETF(SPY, QQQ)에 분산하는 것을 추천합니다."
                                 })
                                 
+                            # 2. HHI (허핀달-허쉬만 다각화 지수) 정밀 진단
+                            hhi = 0.0
+                            for _, r in df_res.iterrows():
+                                ratio = (r["평가금액"] / total_eval_value) * 100
+                                hhi += (ratio ** 2)
+                                
+                            if hhi < 1500:
+                                hhi_status = "🟢 다각화 우수"
+                                hhi_desc = f"허핀달-허쉬만 다각화 지수(HHI)가 **{hhi:.0f}점**으로 매우 우수한 자산 분산 상태입니다. 특정 자산의 가격 하락 충격을 여러 자산이 나누어 방어하여 전체 변동성을 낮추는 효과가 정상 작동 중입니다."
+                                hhi_color = "#10B981"
+                            elif hhi <= 2500:
+                                hhi_status = "🟡 보통 (집중도 중간)"
+                                hhi_desc = f"허핀달-허쉬만 다각화 지수(HHI)가 **{hhi:.0f}점**으로 보통 수준의 집중 상태입니다. 자산이 어느 정도 분산되어 있으나, 시장 급락 시 특정 종목군의 동반 하락 위험이 존재하므로 비중의 미세 조정을 고려해 보세요."
+                                hhi_color = "#F1C40F"
+                            else:
+                                hhi_status = "⚠️ 집중 위험 (고집중)"
+                                hhi_desc = f"허핀달-허쉬만 다각화 지수(HHI)가 **{hhi:.0f}점**으로 위험 수준의 고집중 상태입니다. 포트폴리오의 운명이 특정 종목의 움직임에 과도하게 종속되어 있으므로, 상관관계가 낮은 자산으로의 자본 분배가 시급합니다."
+                                hhi_color = "#FF4B4B"
+                                
+                            diagnostics.append({
+                                "type": "hhi",
+                                "color": hhi_color,
+                                "title": f"📊 HHI 다각화 지수: {hhi_status}",
+                                "desc": hhi_desc
+                            })
+                            
+                            # 3. 오늘의 상승 vs 하락 자산 승률 통계 (Market Breadth)
+                            up_count = len(df_res[df_res['평가손익'] >= 0])
+                            down_count = len(df_res[df_res['평가손익'] < 0])
+                            win_ratio = (up_count / num_tickers) * 100 if num_tickers > 0 else 0
+                            
+                            diagnostics.append({
+                                "type": "breadth",
+                                "color": "#3B82F6",
+                                "title": f"📈 포트폴리오 상승 종목 승률: {up_count}승 {down_count}패",
+                                "desc": f"현재 전체 {num_tickers}개 보유 종목 중 {up_count}개 종목이 이익 상태이며, {down_count}개 종목이 평가 손실을 기록하고 있습니다. (자산 승률: **{win_ratio:.1f}%**)"
+                            })
+                            
+                            # 4. 개별 종목별 쏠림 위험, 10% 이상 손실 경보 및 자산 속성 위험(레버리지 등) 진단
                             for _, r in df_res.iterrows():
                                 ratio = (r["평가금액"] / total_eval_value) * 100
                                 if ratio > 50.0:
                                     diagnostics.append({
                                         "type": "warning",
+                                        "color": "#FF4B4B",
                                         "title": f"⚠️ 특정 자산 쏠림 주의 ({r['티커']})",
                                         "desc": f"현재 '{r['티커']}' 종목이 전체 자산의 {ratio:.1f}%를 차지하고 있어 자산 쏠림 위험이 높습니다. '💼 포트폴리오 분석' 메뉴에서 자산 배분 리밸런싱을 설계해 분산 효과를 극대화해 보세요."
                                     })
+                                
+                                if r["수익률"] <= -10.0:
+                                    diagnostics.append({
+                                        "type": "warning",
+                                        "color": "#FF4B4B",
+                                        "title": f"🚨 개별 종목 위험 경고 ({r['티커']})",
+                                        "desc": f"'{r['티커']}' 종목의 현재 평가 손실률이 **{r['수익률']:.2f}%**로 위험 선(10% 이상 하락)을 넘어섰습니다. 추가 분할 매수를 통해 평단가를 조절하거나, 리스크 통제를 위해 비중을 강제로 축소하는 리밸런싱을 신중히 검토해 보세요."
+                                    })
                                     
-                            if not diagnostics:
+                                # 고유 자산 성격 위험 탐지 (레버리지, 인버스, 코인 등)
+                                asset_risks = risk_profiler.profile_asset_risk(r['티커'])
+                                for ar in asset_risks:
+                                    diagnostics.append({
+                                        "type": "warning",  # warning 타입으로 분류하여 이상 무 보고서를 덮어쓰지 않음
+                                        "color": ar["color"],
+                                        "title": ar["title"],
+                                        "desc": ar["desc"]
+                                    })
+                                    
+                            if not any(d["type"] == "warning" for d in diagnostics):
                                 diagnostics.append({
                                     "type": "success",
+                                    "color": "#10B981",
                                     "title": "🟢 매우 이상적인 자산 다각화 상태",
                                     "desc": "보유 종목 수가 적절하고, 특정 자산에 과도한 쏠림 없이 자금이 안정적으로 배분되어 있습니다. 시장 변동성이 오더라도 극단적인 손실(Tail Risk)을 효율적으로 방어할 수 있는 모범적인 상태입니다."
                                 })
                                 
                             for diag in diagnostics:
-                                color_border = "#FF4B4B" if diag["type"] == "warning" else "#10B981"
                                 st.markdown(f"""
-                                    <div class="opt-card" style="border-color: {color_border}; margin-bottom: 0.8rem;">
+                                    <div class="opt-card" style="border-color: {diag['color']}; margin-bottom: 0.8rem;">
                                         <div style="font-weight: 800; font-size: 1.05rem; color: #F8FAFC; margin-bottom: 0.4rem;">{diag['title']}</div>
                                         <div style="font-size: 0.9rem; color: #94A3B8; line-height: 1.4;">{diag['desc']}</div>
                                     </div>
