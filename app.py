@@ -1733,41 +1733,6 @@ else:
                                         </div>
                                     </div>
                                 """, unsafe_allow_html=True)
-                                
-                                # 양대 포트폴리오 추천 카드 (Model A vs Model B)
-                                col_rec_a, col_rec_b = st.columns(2)
-                                
-                                with col_rec_a:
-                                    st.markdown(f"""
-                                        <div class="opt-card" style="border-color: #3B82F6; height: 100%; min-height: 320px; display: flex; flex-direction: column; justify-content: space-between;">
-                                            <div>
-                                                <div style="font-weight: 800; font-size: 1.05rem; color: #3B82F6; margin-bottom: 0.6rem;">{model_a_name}</div>
-                                                <div style="font-size: 0.88rem; color: #94A3B8; line-height: 1.4; margin-bottom: 1rem;">
-                                                    {model_a_desc}
-                                                </div>
-                                                <div style="border-top: 1px solid #334155; padding-top: 0.6rem;">
-                                                    <div style="font-weight: 700; font-size: 0.88rem; color: #E2E8F0; margin-bottom: 0.4rem;">📊 포트폴리오 권장 배분율:</div>
-                                                    {"".join([f'<div style="font-size: 0.85rem; color: #94A3B8; margin-bottom: 0.2rem;">• <b>{asset["ticker"]}</b>: <span style="color: #3B82F6; font-weight:700;">{asset["weight"]:.1f}%</span></div>' for asset in model_a_assets])}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    """, unsafe_allow_html=True)
-                                    
-                                with col_rec_b:
-                                    st.markdown(f"""
-                                        <div class="opt-card" style="border-color: #EF553B; height: 100%; min-height: 320px; display: flex; flex-direction: column; justify-content: space-between;">
-                                            <div>
-                                                <div style="font-weight: 800; font-size: 1.05rem; color: #EF553B; margin-bottom: 0.6rem;">{model_b_name}</div>
-                                                <div style="font-size: 0.88rem; color: #94A3B8; line-height: 1.4; margin-bottom: 1rem;">
-                                                    {model_b_desc}
-                                                </div>
-                                                <div style="border-top: 1px solid #334155; padding-top: 0.6rem;">
-                                                    <div style="font-weight: 700; font-size: 0.88rem; color: #E2E8F0; margin-bottom: 0.4rem;">📊 포트폴리오 권장 배분율:</div>
-                                                    {"".join([f'<div style="font-size: 0.85rem; color: #94A3B8; margin-bottom: 0.2rem;">• <b>{asset["ticker"]}</b>: <span style="color: #EF553B; font-weight:700;">{asset["weight"]:.1f}%</span></div>' for asset in model_b_assets])}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    """, unsafe_allow_html=True)
     # =======================================================
     #            🚨 시장 위험 지표 모니터링 대시보드
     # =======================================================
