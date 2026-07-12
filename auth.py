@@ -11,11 +11,19 @@ DB_PATH = os.path.join(BASE_DIR, "users.db")
 # 보안 강화를 위한 솔트(Salt) 값 설정
 PASSWORD_SALT = "antigravity-secure-salt-2026!#"
 
-# 실제 이메일 발송을 원하시면 아래 설정을 채워주세요. (예: Gmail 앱 비밀번호)
+# 실제 이메일 발송을 원하시면 아래 설정을 채워주거나 Streamlit Secrets에 등록해 주세요.
+import streamlit as st
+
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = ""       # 발송용 Gmail 주소 (예: "example@gmail.com")
-SMTP_PASSWORD = ""   # Gmail 계정 앱 비밀번호 (16자리)
+
+try:
+    # Streamlit Secrets(환경 변수)에서 계정 보안 로딩
+    SMTP_USER = st.secrets.get("SMTP_USER", "")
+    SMTP_PASSWORD = st.secrets.get("SMTP_PASSWORD", "")
+except Exception:
+    SMTP_USER = ""
+    SMTP_PASSWORD = ""
 
 def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션"""
@@ -233,7 +241,7 @@ def send_account_info_email(to_email, subject, content_title, content_desc, valu
         return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
 
 def delete_user(username):
-    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴)"""
+    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴) - 대소문자 무시 매칭"""
     init_db()
     username = username.strip()
     if not username:
@@ -246,12 +254,12 @@ def delete_user(username):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        # 유저 존재 여부 확인
-        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        # 대소문자 무시하고 유저 존재 여부 확인 (COLLATE NOCASE 적용)
+        cursor.execute("SELECT username FROM users WHERE username = ? COLLATE NOCASE", (username,))
         if not cursor.fetchone():
             return False, "존재하지 않는 회원입니다."
             
-        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        cursor.execute("DELETE FROM users WHERE username = ? COLLATE NOCASE", (username,))
         conn.commit()
         return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
     except Exception as e:
