@@ -25,6 +25,19 @@ try:
 except Exception:
     GMAIL_USER = GMAIL_PASSWORD = NAVER_USER = NAVER_PASSWORD = ""
 
+# ☁️ Supabase Cloud DB 하이브리드 연동
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase_url") or ""
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase_key") or ""
+    if SUPABASE_URL.strip() and SUPABASE_KEY.strip():
+        supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        USE_SUPABASE = True
+    else:
+        USE_SUPABASE = False
+except Exception:
+    USE_SUPABASE = False
+
 def get_smtp_config(email):
     """이메일 주소 도메인을 분석해 알맞은 SMTP 서버 정보와 포트, SSL 여부를 반환"""
     email_lower = email.strip().lower()
@@ -84,7 +97,10 @@ def dispatch_email(to_email, subject, html_body, demo_fallback_value):
     return False, f"등록된 모든 발송 메일 계정의 시도가 실패했습니다. 마지막 오류: {last_error}"
 
 def init_db():
-    """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션"""
+    """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션 (SQLite용 예비 엔진)"""
+    if USE_SUPABASE:
+        return  # Supabase 모드 사용 시 SQLite 초기화 건너뜀
+        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -152,9 +168,7 @@ def send_verification_email(to_email, code):
     return dispatch_email(to_email, "[Dynamic Stock Backtester] 회원가입 이메일 인증번호", html_body, code)
 
 def register_user(username, password, email):
-    """신규 회원가입 처리 (이메일 추가)"""
-    init_db()  # DB 초기화 보장
-    
+    """신규 회원가입 처리 (이메일 추가, Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     password = password.strip()
     email = email.strip()
@@ -162,105 +176,155 @@ def register_user(username, password, email):
     if not username or not password or not email:
         return False, "아이디, 비밀번호, 이메일을 모두 입력해 주세요."
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # 아이디 중복 여부 확인
-        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
-        if cursor.fetchone():
-            return False, "이미 존재하는 아이디입니다."
-        
-        # 비밀번호 암호화 후 가입 처리 (이메일 컬럼 포함)
-        hashed_pwd = hash_password(password)
-        cursor.execute("INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)", (username, hashed_pwd, email))
-        conn.commit()
-        return True, "회원가입이 완료되었습니다! 로그인해 주세요."
-    except Exception as e:
-        return False, f"오류가 발생했습니다: {e}"
-    finally:
-        conn.close()
+    hashed_pwd = hash_password(password)
+
+    if USE_SUPABASE:
+        try:
+            # ID 중복 확인
+            res = supabase_client.table("users").select("username").eq("username", username).execute()
+            if res.data:
+                return False, "이미 존재하는 아이디입니다."
+            
+            # 신규 삽입
+            supabase_client.table("users").insert({
+                "username": username,
+                "password_hash": hashed_pwd,
+                "email": email
+            }).execute()
+            return True, "회원가입이 완료되었습니다! 로그인해 주세요."
+        except Exception as e:
+            return False, f"클라우드 DB 오류: {e}"
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+            if cursor.fetchone():
+                return False, "이미 존재하는 아이디입니다."
+            
+            cursor.execute("INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)", (username, hashed_pwd, email))
+            conn.commit()
+            return True, "회원가입이 완료되었습니다! 로그인해 주세요."
+        except Exception as e:
+            return False, f"로컬 DB 오류: {e}"
+        finally:
+            conn.close()
 
 def verify_user(username, password):
-    """로그인 검증 (아이디/비밀번호 확인)"""
-    init_db()  # DB 초기화 보장
-    
+    """로그인 검증 (아이디/비밀번호 확인, Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     password = password.strip()
     
     if not username or not password:
         return False
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        hashed_pwd = hash_password(password)
-        cursor.execute("SELECT username FROM users WHERE username = ? AND password_hash = ?", (username, hashed_pwd))
-        user = cursor.fetchone()
-        return user is not None
-    except Exception as e:
-        return False
-    finally:
-        conn.close()
+    hashed_pwd = hash_password(password)
+
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username").eq("username", username).eq("password_hash", hashed_pwd).execute()
+            return len(res.data) > 0
+        except Exception:
+            return False
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE username = ? AND password_hash = ?", (username, hashed_pwd))
+            user = cursor.fetchone()
+            return user is not None
+        except Exception:
+            return False
+        finally:
+            conn.close()
 
 def get_all_users():
-    """관리자용: 가입된 모든 유저 목록 조회"""
-    init_db()  # DB 초기화 보장
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT username, email, created_at FROM users ORDER BY created_at DESC")
-        return cursor.fetchall()
-    except Exception:
-        return []
-    finally:
-        conn.close()
+    """관리자용: 가입된 모든 유저 목록 조회 (Supabase/SQLite 하이브리드 지원)"""
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username, email, created_at").order("created_at", desc=True).execute()
+            return [(item["username"], item["email"], item["created_at"]) for item in res.data]
+        except Exception:
+            return []
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username, email, created_at FROM users ORDER BY created_at DESC")
+            return cursor.fetchall()
+        except Exception:
+            return []
+        finally:
+            conn.close()
 
 def find_id_by_email(email):
-    """이메일로 가입된 아이디 찾기"""
-    init_db()
+    """이메일로 가입된 아이디 찾기 (Supabase/SQLite 하이브리드 지원)"""
     email = email.strip()
     if not email:
         return None
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT username FROM users WHERE email = ?", (email,))
-        rows = cursor.fetchall()
-        if rows:
-            return [row[0] for row in rows]
-        return None
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username").eq("email", email).execute()
+            if res.data:
+                return [item["username"] for item in res.data]
+            return None
+        except Exception:
+            return None
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE email = ?", (email,))
+            rows = cursor.fetchall()
+            if rows:
+                return [row[0] for row in rows]
+            return None
+        except Exception:
+            return None
+        finally:
+            conn.close()
 
 def reset_to_temp_password(username, email, temp_password):
-    """비밀번호 재설정: 아이디와 이메일이 일치하면 임시 비밀번호 해시로 업데이트"""
-    init_db()
+    """비밀번호 재설정 (Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     email = email.strip()
     
     if not username or not email or not temp_password:
         return False, "정보가 올바르지 않습니다."
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT username FROM users WHERE username = ? AND email = ?", (username, email))
-        if not cursor.fetchone():
-            return False, "입력하신 아이디와 이메일 정보가 일치하는 회원이 없습니다."
-        
-        hashed_pwd = hash_password(temp_password)
-        cursor.execute("UPDATE users SET password_hash = ? WHERE username = ? AND email = ?", (hashed_pwd, username, email))
-        conn.commit()
-        return True, "임시 비밀번호로 재설정이 완료되었습니다."
-    except Exception as e:
-        return False, f"오류가 발생했습니다: {e}"
-    finally:
-        conn.close()
+    hashed_pwd = hash_password(temp_password)
+
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username").eq("username", username).eq("email", email).execute()
+            if not res.data:
+                return False, "입력하신 아이디와 이메일 정보가 일치하는 회원이 없습니다."
+            
+            supabase_client.table("users").update({"password_hash": hashed_pwd}).eq("username", username).eq("email", email).execute()
+            return True, "임시 비밀번호로 재설정이 완료되었습니다."
+        except Exception as e:
+            return False, f"클라우드 DB 오류: {e}"
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE username = ? AND email = ?", (username, email))
+            if not cursor.fetchone():
+                return False, "입력하신 아이디와 이메일 정보가 일치하는 회원이 없습니다."
+            
+            cursor.execute("UPDATE users SET password_hash = ? WHERE username = ? AND email = ?", (hashed_pwd, username, email))
+            conn.commit()
+            return True, "임시 비밀번호로 재설정이 완료되었습니다."
+        except Exception as e:
+            return False, f"로컬 DB 오류: {e}"
+        finally:
+            conn.close()
 
 def send_account_info_email(to_email, subject, content_title, content_desc, value_to_highlight):
     """사용자 계정 정보 안내 메일 발송 (듀얼 SMTP 폴백 엔진 적용)"""
@@ -284,33 +348,46 @@ def send_account_info_email(to_email, subject, content_title, content_desc, valu
     return dispatch_email(to_email, f"계정 정보 안내 - {subject}", html_body, value_to_highlight)
 
 def delete_user(username):
-    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴) - 공백/대소문자 완벽 무시 매칭"""
-    init_db()
+    """관리자용: 특정 사용자 계정 삭제 (Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     if not username:
         return False, "아이디가 올바르지 않습니다."
     
-    # admin 계정은 본인이므로 삭제 방지 보안 처리
     if username.lower() == "admin":
         return False, "관리자(admin) 계정은 삭제할 수 없습니다."
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        # 데이터베이스 내부의 아이디 앞뒤 공백(TRIM)과 대소문자를 모두 지우고 완벽하게 확인
-        cursor.execute("SELECT username FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
-        if not cursor.fetchone():
-            return False, "존재하지 않는 회원입니다."
+    if USE_SUPABASE:
+        try:
+            # 대소문자 무관하게 계정 조회
+            res = supabase_client.table("users").select("username").ilike("username", username).execute()
+            if not res.data:
+                return False, "존재하지 않는 회원입니다."
             
-        cursor.execute("DELETE FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
-        # 해당 유저의 로그인 세션도 파괴
-        cursor.execute("DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,))
-        conn.commit()
-        return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
-    except Exception as e:
-        return False, f"오류가 발생했습니다: {e}"
-    finally:
-        conn.close()
+            target_user = res.data[0]["username"]
+            supabase_client.table("users").delete().eq("username", target_user).execute()
+            supabase_client.table("sessions").delete().eq("username", target_user).execute()
+            supabase_client.table("user_portfolios").delete().eq("username", target_user).execute()
+            return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
+        except Exception as e:
+            return False, f"클라우드 DB 오류: {e}"
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
+            if not cursor.fetchone():
+                return False, "존재하지 않는 회원입니다."
+                
+            cursor.execute("DELETE FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
+            cursor.execute("DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,))
+            cursor.execute("DELETE FROM user_portfolios WHERE username = ? COLLATE NOCASE", (username,))
+            conn.commit()
+            return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
+        except Exception as e:
+            return False, f"로컬 DB 오류: {e}"
+        finally:
+            conn.close()
 
 def is_valid_username(username):
     """아이디 유효성 검사: 3~15자의 영문, 숫자, 언더바(_)만 허용"""
@@ -339,117 +416,194 @@ def is_strong_password(password):
     return True, "안전한 비밀번호입니다."
 
 def create_session(username):
-    """새로운 세션 생성 및 DB 저장 (유효 기간: 2일)"""
-    init_db()
+    """새로운 세션 생성 및 DB 저장 (유효 기간: 2일, Supabase/SQLite 하이브리드)"""
     username = username.strip()
     token = secrets.token_hex(16)  # 32자리 헥사 스트링 생성
-    expires_at = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)", (token, username, expires_at))
-        conn.commit()
-        return token
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    if USE_SUPABASE:
+        expires_at = (datetime.now() + timedelta(days=2)).isoformat()
+        try:
+            supabase_client.table("sessions").insert({
+                "token": token,
+                "username": username,
+                "expires_at": expires_at
+            }).execute()
+            return token
+        except Exception:
+            return None
+    else:
+        init_db()
+        expires_at = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)", (token, username, expires_at))
+            conn.commit()
+            return token
+        except Exception:
+            return None
+        finally:
+            conn.close()
 
 def verify_session_token(token):
-    """세션 토큰 유효성 검사: 만료되지 않았으면 해당 username 반환"""
-    init_db()
+    """세션 토큰 유효성 검사 (Supabase/SQLite 하이브리드 지원)"""
     token = token.strip()
     if not token:
         return None
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT username, expires_at FROM sessions WHERE token = ?", (token,))
-        row = cursor.fetchone()
-        if row:
-            username, expires_at_str = row
-            expires_at = datetime.strptime(expires_at_str, '%Y-%m-%d %H:%M:%S')
-            if datetime.now() < expires_at:
-                return username
-            else:
-                # 만료된 세션 파기
-                cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-                conn.commit()
-        return None
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("sessions").select("username, expires_at").eq("token", token).execute()
+            if res.data:
+                username = res.data[0]["username"]
+                expires_at_str = res.data[0]["expires_at"]
+                
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                except ValueError:
+                    expires_at = datetime.strptime(expires_at_str[:19], '%Y-%m-%d %H:%M:%S')
+                    
+                if expires_at.tzinfo is not None:
+                    expires_at = expires_at.replace(tzinfo=None)
+                    
+                if datetime.now() < expires_at:
+                    return username
+                else:
+                    supabase_client.table("sessions").delete().eq("token", token).execute()
+            return None
+        except Exception:
+            return None
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username, expires_at FROM sessions WHERE token = ?", (token,))
+            row = cursor.fetchone()
+            if row:
+                username, expires_at_str = row
+                expires_at = datetime.strptime(expires_at_str, '%Y-%m-%d %H:%M:%S')
+                if datetime.now() < expires_at:
+                    return username
+                else:
+                    cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                    conn.commit()
+            return None
+        except Exception:
+            return None
+        finally:
+            conn.close()
 
 def destroy_session(token):
-    """세션 무효화 (DB에서 삭제)"""
-    init_db()
+    """세션 무효화 (DB에서 삭제, Supabase/SQLite 하이브리드 지원)"""
     token = token.strip()
     if not token:
         return
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
-        conn.commit()
-    except Exception:
-        pass
-    finally:
-        conn.close()
+    if USE_SUPABASE:
+        try:
+            supabase_client.table("sessions").delete().eq("token", token).execute()
+        except Exception:
+            pass
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
 
 def get_user_portfolio(username):
-    """유저가 기존에 저장한 실보유 자산 포트폴리오 목록 조회"""
-    init_db()
+    """유저가 기존에 저장한 실보유 자산 포트폴리오 목록 조회 (Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     if not username:
         return None
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT ticker, buy_price, shares FROM user_portfolios WHERE username = ?", (username,))
-        rows = cursor.fetchall()
-        if not rows:
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("user_portfolios").select("ticker, buy_price, shares").eq("username", username).execute()
+            if not res.data:
+                return None
+            return [{"티커": item["ticker"], "매수 평단가": item["buy_price"], "보유 수량": item["shares"]} for item in res.data]
+        except Exception:
             return None
-        return [{"티커": r[0], "매수 평단가": r[1], "보유 수량": r[2]} for r in rows]
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT ticker, buy_price, shares FROM user_portfolios WHERE username = ?", (username,))
+            rows = cursor.fetchall()
+            if not rows:
+                return None
+            return [{"티커": r[0], "매수 평단가": r[1], "보유 수량": r[2]} for r in rows]
+        except Exception:
+            return None
+        finally:
+            conn.close()
 
 def overwrite_user_portfolio(username, df):
-    """유저의 최신 포트폴리오 상태로 DB에 일괄 덮어쓰기 업데이트"""
-    init_db()
+    """유저의 최신 포트폴리오 상태로 DB에 일괄 덮어쓰기 업데이트 (Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()
     if not username or df is None:
         return
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        # 기존 저장 데이터 삭제
-        cursor.execute("DELETE FROM user_portfolios WHERE username = ?", (username,))
-        
-        # 새 편집본 행 순회 및 저장
-        for _, row in df.iterrows():
-            ticker = str(row.get("티커", "")).strip().upper()
-            if not ticker:
-                 continue
-            try:
-                buy_price = float(row.get("매수 평단가", 0.0))
-                shares = float(row.get("보유 수량", 0.0))
-            except (ValueError, TypeError):
-                continue
-                
-            cursor.execute(
-                "INSERT OR REPLACE INTO user_portfolios (username, ticker, buy_price, shares) VALUES (?, ?, ?, ?)",
-                (username, ticker, buy_price, shares)
-            )
-        conn.commit()
-    except Exception:
-        pass
-    finally:
-        conn.close()
+    if USE_SUPABASE:
+        try:
+            # 1. 기존 데이터 일괄 삭제
+            supabase_client.table("user_portfolios").delete().eq("username", username).execute()
+            
+            # 2. 새 데이터 일괄 빌드 후 삽입
+            insert_data = []
+            for _, row in df.iterrows():
+                ticker = str(row.get("티커", "")).strip().upper()
+                if not ticker:
+                     continue
+                try:
+                    buy_price = float(row.get("매수 평단가", 0.0))
+                    shares = float(row.get("보유 수량", 0.0))
+                except (ValueError, TypeError):
+                    continue
+                    
+                insert_data.append({
+                    "username": username,
+                    "ticker": ticker,
+                    "buy_price": buy_price,
+                    "shares": shares
+                })
+            if insert_data:
+                supabase_client.table("user_portfolios").insert(insert_data).execute()
+        except Exception:
+            pass
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            # 기존 저장 데이터 삭제
+            cursor.execute("DELETE FROM user_portfolios WHERE username = ?", (username,))
+            
+            # 새 편집본 행 순회 및 저장
+            for _, row in df.iterrows():
+                ticker = str(row.get("티커", "")).strip().upper()
+                if not ticker:
+                     continue
+                try:
+                    buy_price = float(row.get("매수 평단가", 0.0))
+                    shares = float(row.get("보유 수량", 0.0))
+                except (ValueError, TypeError):
+                    continue
+                    
+                cursor.execute(
+                    "INSERT OR REPLACE INTO user_portfolios (username, ticker, buy_price, shares) VALUES (?, ?, ?, ?)",
+                    (username, ticker, buy_price, shares)
+                )
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
