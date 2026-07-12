@@ -1346,7 +1346,8 @@ else:
             if cash_usd_input > 0:
                 combined_to_save.append({"티커": "_CASH_USD_", "매수 평단가": 1.0, "보유 수량": cash_usd_input})
                 
-            auth.save_user_portfolio(st.session_state['username'], combined_to_save)
+            df_to_save = pd.DataFrame(combined_to_save)
+            auth.overwrite_user_portfolio(st.session_state['username'], df_to_save)
         
         # 콜백이 실행되어 세션 값이 바뀐 후 화면 렌더링에 사용할 임시 DF 매핑
         df_for_calc = st.session_state['my_portfolio_data']
