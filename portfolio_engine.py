@@ -39,7 +39,7 @@ def get_portfolio_data(tickers, start_date, end_date):
 def backtest_portfolio(df, weights, initial_capital, rebalance_period="None", contribution_amount=0.0):
     """
     주어진 자산 비중으로 포트폴리오 백테스트 시뮬레이션
-    - rebalance_period: "None", "Monthly", "Annually"
+    - rebalance_period: "None", "Monthly", "Quarterly", "Annually"
     - contribution_amount: 매월 초 추가로 납입할 적립식 자금
     """
     # 비중 배열 변환 및 정규화
@@ -73,6 +73,7 @@ def backtest_portfolio(df, weights, initial_capital, rebalance_period="None", co
         
         # 1) 매월 초 적립식 자금 추가 납입 감지 (이전 데이터와 비교해 달이 변경되었을 때)
         is_new_month = curr_date.month != prev_date.month
+        is_new_quarter = ((curr_date.month - 1) // 3) != ((prev_date.month - 1) // 3)
         is_new_year = curr_date.year != prev_date.year
         
         if is_new_month and contribution_amount > 0:
@@ -84,6 +85,8 @@ def backtest_portfolio(df, weights, initial_capital, rebalance_period="None", co
         # 2) 주기적 리밸런싱 감지 및 수행
         should_rebalance = False
         if rebalance_period == "Monthly" and is_new_month:
+            should_rebalance = True
+        elif rebalance_period == "Quarterly" and is_new_quarter:
             should_rebalance = True
         elif rebalance_period == "Annually" and is_new_year:
             should_rebalance = True

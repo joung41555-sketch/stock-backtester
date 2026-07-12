@@ -7,6 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import auth  # 사용자 정의 인증 모듈 임포트
 import portfolio_engine  # MPT 포트폴리오 엔진 임포트
+import ticker_search  # 실시간 티커 검색 자동완성 모듈 임포트
 import random
 import string
 
@@ -37,6 +38,10 @@ if 'login_attempts' not in st.session_state:
     st.session_state['login_attempts'] = 0
 if 'lock_until' not in st.session_state:
     st.session_state['lock_until'] = None
+
+# 포트폴리오 자산 구성 멀티 어펜드용 세션 상태 신설
+if 'portfolio_tickers' not in st.session_state:
+    st.session_state['portfolio_tickers'] = "AAPL, NVDA, TSLA, MSFT"
 
 # 새로고침 발생 시 URL 파라미터(session_key)를 확인하여 자동 로그인 복원
 if not st.session_state['logged_in']:
@@ -633,16 +638,41 @@ else:
         st.sidebar.subheader("⚙️ 관리자 전용 메뉴")
         admin_mode = st.sidebar.radio(
             "화면 모드 선택",
-            ["📈 백테스터 실행", "💼 포트폴리오 분석", "👥 가입 회원 관리"]
+            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단", "👥 가입 회원 관리"]
         )
         st.sidebar.markdown("---")
     else:
         st.sidebar.subheader("📂 메뉴 선택")
         admin_mode = st.sidebar.radio(
             "화면 모드 선택",
-            ["📈 백테스터 실행", "💼 포트폴리오 분석"]
+            ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단"]
         )
         st.sidebar.markdown("---")
+
+    # =======================================================
+    #                🔑 실시간 티커 사전 위젯 (공용)
+    # =======================================================
+    # 모든 분석 화면 사이드바에 실시간 추천 단어 자동 완성 창을 배치해 검색을 도움
+    if admin_mode in ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단"]:
+        with st.sidebar.expander("🔍 실시간 티커 검색기 (자동완성)", expanded=False):
+            search_query = st.text_input("주식명 또는 철자 입력", value="", placeholder="예: AAPL, 삼성, NV")
+            search_results = ticker_search.search_yahoo_tickers(search_query)
+            
+            selected_search_item = st.selectbox("검색 결과 (티커 복사용)", search_results)
+            if selected_search_item:
+                pure_symbol = selected_search_item.split(" ")[0]
+                st.code(pure_symbol, language="text")
+                st.caption("위의 박스 안 티커명을 더블클릭하거나 복사(Ctrl+C)하여 입력창에 붙여 넣으세요.")
+                
+                # 포트폴리오 탭용 복사 보조 버튼 연동
+                if admin_mode == "💼 포트폴리오 분석":
+                    if st.button("➕ 포트폴리오에 즉시 추가"):
+                        current_list = [t.strip().upper() for t in st.session_state['portfolio_tickers'].split(",") if t.strip()]
+                        if pure_symbol not in current_list:
+                            current_list.append(pure_symbol)
+                            st.session_state['portfolio_tickers'] = ", ".join(current_list)
+                            st.success(f"{pure_symbol}이(가) 포트폴리오 쉼표 목록에 추가되었습니다!")
+                            st.rerun()
 
     # =======================================================
     #                      관리자 전용 대시보드 화면
@@ -717,7 +747,7 @@ else:
             st.info("현재 관리자 계정 외에 가입된 일반 회원 계정이 존재하지 않습니다.")
 
     # =======================================================
-    #                  💼 포트폴리오 분석 및 최적화 (Visualizer 스펙)
+    #                  💼 포트폴리오 분석 및 최적화
     # =======================================================
     elif admin_mode == "💼 포트폴리오 분석":
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">💼 Portfolio Visualizer 분석 엔진</h1>', unsafe_allow_html=True)
@@ -725,7 +755,10 @@ else:
         
         # 사이드바 입력 설정
         st.sidebar.subheader("1. 포트폴리오 구성 종목")
-        tickers_input = st.sidebar.text_input("종목 티커 입력 (쉼표 구분)", value="AAPL, NVDA, TSLA, MSFT")
+        
+        # 세션 연계로 사이드바 검색기에서 단추 클릭 시 자동 증식
+        tickers_input = st.sidebar.text_input("종목 티커 입력 (쉼표 구분)", value=st.session_state['portfolio_tickers'])
+        st.session_state['portfolio_tickers'] = tickers_input
         parsed_tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
         
         today = datetime.today()
@@ -739,25 +772,32 @@ else:
         
         rebalance_period = st.sidebar.selectbox(
             "자산 비중 리밸런싱 주기 (Rebalancing)",
-            ["None", "Monthly", "Annually"]
+            ["None", "Monthly", "Quarterly", "Annually"]
         )
         
         # 3) 종목별 자산 배분 비중 동적 입력기 구성
         st.sidebar.subheader("3. 자산별 투자 비중 설정")
         weights = []
         
-        # 동적 슬라이더 생성
+        # 동적 소수점 입력 창 생성 (number_input)
         for ticker in parsed_tickers:
-            w_val = st.sidebar.slider(f"{ticker} 비중 (%)", min_value=0, max_value=100, value=100 // len(parsed_tickers))
+            w_val = st.sidebar.number_input(
+                f"{ticker} 비중 (%)", 
+                min_value=0.0, 
+                max_value=100.0, 
+                value=float(100.0 / len(parsed_tickers)) if len(parsed_tickers) > 0 else 0.0, 
+                step=0.01, 
+                format="%.2f"
+            )
             weights.append(w_val)
             
         sum_weights = sum(weights)
-        st.sidebar.markdown(f"**현재 비중 총합:** `{sum_weights}%` (반드시 **100%** 여야 함)")
+        st.sidebar.markdown(f"**현재 비중 총합:** `{sum_weights:.2f}%` (반드시 **100%** 여야 함)")
         
-        # 합이 100%가 아닌 경우 에러 경고
-        w_validation = (sum_weights == 100)
+        # 부동소수점 오차 보정 고려 (100%와의 차이가 0.01% 미만이면 통과)
+        w_validation = (abs(sum_weights - 100.0) < 0.01)
         if not w_validation:
-            st.sidebar.warning("⚠️ 모든 자산 비중의 총합이 100%가 되도록 조정해 주세요.")
+            st.sidebar.warning("⚠️ 모든 자산 비중의 총합이 정확하게 100.00%가 되도록 조정해 주세요.")
             
         run_port = st.sidebar.button("📊 포트폴리오 분석 실행", use_container_width=True, disabled=not w_validation)
         
@@ -902,7 +942,6 @@ else:
                         
                     with col_chart2:
                         st.markdown("##### 📈 자산별 누적 자산 성장 곡선 (적립금 반영)")
-                        # 개별 자산들의 단순 Buy & Hold 누적 성과 비교
                         line_fig = go.Figure()
                         
                         # 결합 포트폴리오 곡선
@@ -915,7 +954,6 @@ else:
                         
                         # 개별 자산 곡선들
                         for ticker in parsed_tickers:
-                            # 개별 종목도 동일하게 적립 투자 적용하여 공정하게 시뮬레이션
                             p_shares = 0.0
                             p_cash = initial_capital
                             p_values = []
@@ -953,7 +991,7 @@ else:
                         )
                         st.plotly_chart(line_fig, use_container_width=True)
                         
-                    # ----------------- 📊 연도별 수익률 막대 차트 (신설) -----------------
+                    # ----------------- 📊 연도별 수익률 막대 차트 -----------------
                     st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown("### 📊 연도별 수익률 통계 (Annual Returns)")
                     
@@ -979,7 +1017,6 @@ else:
                             st.plotly_chart(bar_fig, use_container_width=True)
                             
                         with col_yr2:
-                            # 표 데이터 가독성 좋게 변경
                             df_yr_styled = df_yr.copy()
                             df_yr_styled['Return'] = df_yr_styled['Return'].map(lambda x: f"{x:+.2f}%")
                             st.dataframe(
@@ -1061,6 +1098,235 @@ else:
                     st.plotly_chart(scat_fig, use_container_width=True)
 
     # =======================================================
+    #            📊 실시간 보유 자산 트래커 & 위험 진단
+    # =======================================================
+    elif admin_mode == "📊 현재 포트폴리오 진단":
+        st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 실시간 보유 자산 트래커</h1>', unsafe_allow_html=True)
+        st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">내가 현재 실제로 들고 있는 개별 주식들의 평단가와 수량을 입력하여 실시간 평가 손익 및 리스크를 분석합니다.</p>', unsafe_allow_html=True)
+        
+        st.markdown("### 📝 실시간 보유 주식 정보 입력")
+        st.info("💡 아래 테이블을 더블클릭하여 내 주식의 '티커(예: AAPL)', '평단가', '보유 수량'을 수정하거나 아래 행을 추가/삭제하여 나만의 자산을 등록하세요. 왼쪽 사이드바의 [실시간 티커 검색기]를 통해 정확한 티커 알파벳을 복사해 기입하실 수 있습니다.")
+        
+        # 기본 보유 포트폴리오 테이블 뼈대
+        if 'my_portfolio_data' not in st.session_state:
+            st.session_state['my_portfolio_data'] = pd.DataFrame([
+                {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
+                {"티커": "NVDA", "매수 평단가": 100.0, "보유 수량": 25.0},
+                {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
+            ])
+            
+        # 스프레드시트 에디터 지원
+        edited_df = st.data_editor(
+            st.session_state['my_portfolio_data'],
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "티커": st.column_config.TextColumn("주식 티커 (예: AAPL)", width="medium", required=True),
+                "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, format="%.2f", required=True),
+                "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, format="%.2f", required=True)
+            },
+            key="portfolio_editor"
+        )
+        
+        st.session_state['my_portfolio_data'] = edited_df
+        
+        col_btn, _ = st.columns([1, 3])
+        with col_btn:
+            calc_run = st.button("📊 실시간 보유 자산 분석하기", type="primary", use_container_width=True)
+            
+        if calc_run or 'calc_run_state' not in st.session_state:
+            st.session_state['calc_run_state'] = True
+            
+            # 입력값 검증
+            df_valid = edited_df.dropna(subset=["티커", "매수 평단가", "보유 수량"])
+            df_valid = df_valid[df_valid["티커"].str.strip() != ""]
+            
+            if df_valid.empty:
+                st.warning("⚠️ 분석할 보유 자산 정보를 최소 한 종목 이상 입력해 주세요.")
+            else:
+                with st.spinner("실시간 시장 가격을 야후 파이낸스(yfinance)로부터 수집 중..."):
+                    results = []
+                    total_buy_value = 0.0
+                    total_eval_value = 0.0
+                    
+                    has_error = False
+                    error_ticker = ""
+                    
+                    for _, row in df_valid.iterrows():
+                        ticker = row["티커"].strip().upper()
+                        buy_price = float(row["매수 평단가"])
+                        shares = float(row["보유 수량"])
+                        
+                        try:
+                            raw_df = yf.download(ticker, period="1d")
+                            if raw_df.empty:
+                                has_error = True
+                                error_ticker = ticker
+                                break
+                                
+                            if isinstance(raw_df.columns, pd.MultiIndex):
+                                raw_df.columns = raw_df.columns.get_level_values(0)
+                                
+                            curr_price = float(raw_df['Close'].iloc[-1])
+                        except Exception:
+                            has_error = True
+                            error_ticker = ticker
+                            break
+                            
+                        buy_val = buy_price * shares
+                        eval_val = curr_price * shares
+                        profit_val = eval_val - buy_val
+                        profit_pct = (profit_val / buy_val) * 100 if buy_val > 0 else 0
+                        
+                        total_buy_value += buy_val
+                        total_eval_value += eval_val
+                        
+                        results.append({
+                            "티커": ticker,
+                            "평단가": buy_price,
+                            "현재가": curr_price,
+                            "보유수량": shares,
+                            "매입금액": buy_val,
+                            "평가금액": eval_val,
+                            "평가손익": profit_val,
+                            "수익률": profit_pct
+                        })
+                        
+                    if has_error:
+                        st.error(f"티커 '{error_ticker}'의 실시간 시세를 가져오는데 실패했습니다. 올바른 해외/국내 주식 티커인지 다시 확인해 주세요.")
+                    else:
+                        df_res = pd.DataFrame(results)
+                        
+                        # 총합 성과 산정
+                        total_profit = total_eval_value - total_buy_value
+                        total_profit_pct = (total_profit / total_buy_value) * 100 if total_buy_value > 0 else 0
+                        
+                        # 실시간 요약 메트릭
+                        st.markdown("### 🏆 실시간 보유 자산 총계 요약")
+                        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+                        
+                        with c_m1:
+                            st.markdown(
+                                f"""<div class="metric-card">
+                                    <div class="metric-label">총 매입 자산 (원금)</div>
+                                    <div class="metric-value">{total_buy_value:,.2f}</div>
+                                </div>""", 
+                                unsafe_allow_html=True
+                            )
+                        with c_m2:
+                            st.markdown(
+                                f"""<div class="metric-card">
+                                    <div class="metric-label">총 평가 자산 (현재가)</div>
+                                    <div class="metric-value" style="color: #3B82F6;">{total_eval_value:,.2f}</div>
+                                </div>""", 
+                                unsafe_allow_html=True
+                            )
+                        with c_m3:
+                            st.markdown(
+                                f"""<div class="metric-card">
+                                    <div class="metric-label">총 평가 손익</div>
+                                    <div class="metric-value" style="color: {'#10B981' if total_profit >= 0 else '#EF4444'};">
+                                        {'+' if total_profit >= 0 else ''}{total_profit:,.2f}
+                                    </div>
+                                </div>""", 
+                                unsafe_allow_html=True
+                            )
+                        with c_m4:
+                            st.markdown(
+                                f"""<div class="metric-card">
+                                    <div class="metric-label">총 포트폴리오 수익률</div>
+                                    <div class="metric-value" style="color: {'#10B981' if total_profit_pct >= 0 else '#EF4444'};">
+                                        {'+' if total_profit_pct >= 0 else ''}{total_profit_pct:.2f}%
+                                    </div>
+                                </div>""", 
+                                unsafe_allow_html=True
+                            )
+                            
+                        # 개별 종목 그리드 카드
+                        st.markdown("<br>##### 📊 자산별 실시간 평가 손익 현황", unsafe_allow_html=True)
+                        
+                        col_cards = st.columns(len(df_res))
+                        for idx, row in df_res.iterrows():
+                            card_col = col_cards[idx % len(df_res)]
+                            is_profit = row['평가손익'] >= 0
+                            color_card = "#10B981" if is_profit else "#EF4444"
+                            sign_card = "+" if is_profit else ""
+                            arrow_card = "▲" if is_profit else "▼"
+                            
+                            card_col.markdown(f"""
+                                <div class="spark-card" style="border-left: 5px solid {color_card};">
+                                    <div style="font-size: 1.1rem; font-weight: 800; color: #F8FAFC;">{row['티커']}</div>
+                                    <div style="font-size: 0.8rem; color: #94A3B8; margin-top: 0.2rem;">
+                                        평단: {row['평단가']:,.2f} / 현재가: {row['현재가']:,.2f}
+                                    </div>
+                                    <hr style="border: 0; border-top: 1px solid #334155; margin: 8px 0;">
+                                    <div style="font-size: 0.85rem; color: #94A3B8;">보유량: {row['보유수량']:.1f} 주</div>
+                                    <div style="font-size: 0.85rem; color: #94A3B8;">평가액: {row['평가금액']:,.2f}</div>
+                                    <div style="font-size: 1.1rem; font-weight: 700; color: {color_card}; margin-top: 0.4rem;">
+                                        {arrow_card} {sign_card}{row['평가손익']:,.2f} ({sign_card}{row['수익률']:.2f}%)
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                        # 실시간 비중 도넛 차트 & 리스크 진단
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        c_div1, c_div2 = st.columns([1.2, 1.8])
+                        
+                        with c_div1:
+                            st.markdown("##### 🍩 실시간 자산 배분 비중")
+                            live_donut = go.Figure(data=[go.Pie(
+                                labels=df_res['티커'].tolist(),
+                                values=df_res['평가금액'].tolist(),
+                                hole=.4,
+                                marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#19D3F3'])
+                            )])
+                            live_donut.update_layout(
+                                template="plotly_dark",
+                                height=300,
+                                margin=dict(l=10, r=10, t=10, b=10),
+                                legend=dict(orientation="h", y=-0.1)
+                            )
+                            st.plotly_chart(live_donut, use_container_width=True)
+                            
+                        with c_div2:
+                            st.markdown("##### 🛡️ 포트폴리오 리스크 진단 및 조언")
+                            
+                            diagnostics = []
+                            num_tickers = len(df_res)
+                            
+                            if num_tickers <= 2:
+                                diagnostics.append({
+                                    "type": "warning",
+                                    "title": "⚠️ 극심한 자산 집중 위험 감지",
+                                    "desc": f"현재 보유 종목 수({num_tickers}개)가 너무 적어 특정 기업의 개별 악재(어닝 쇼크 등) 시 포트폴리오 전체가 큰 충격을 받습니다. 최소 3~5개 이상의 상관관계가 낮은 종목이나 시장 지수 ETF(SPY, QQQ)에 분산하는 것을 추천합니다."
+                                })
+                                
+                            for _, r in df_res.iterrows():
+                                ratio = (r["평가금액"] / total_eval_value) * 100
+                                if ratio > 50.0:
+                                    diagnostics.append({
+                                        "type": "warning",
+                                        "title": f"⚠️ 특정 자산 쏠림 주의 ({r['티커']})",
+                                        "desc": f"현재 '{r['티커']}' 종목이 전체 자산의 {ratio:.1f}%를 차지하고 있어 자산 쏠림 위험이 높습니다. '💼 포트폴리오 분석' 메뉴에서 자산 배분 리밸런싱을 설계해 분산 효과를 극대화해 보세요."
+                                    })
+                                    
+                            if not diagnostics:
+                                diagnostics.append({
+                                    "type": "success",
+                                    "title": "🟢 매우 이상적인 자산 다각화 상태",
+                                    "desc": "보유 종목 수가 적절하고, 특정 자산에 과도한 쏠림 없이 자금이 안정적으로 배분되어 있습니다. 시장 변동성이 오더라도 극단적인 손실(Tail Risk)을 효율적으로 방어할 수 있는 모범적인 상태입니다."
+                                })
+                                
+                            for diag in diagnostics:
+                                color_border = "#FF4B4B" if diag["type"] == "warning" else "#10B981"
+                                st.markdown(f"""
+                                    <div class="opt-card" style="border-color: {color_border}; margin-bottom: 0.8rem;">
+                                        <div style="font-weight: 800; font-size: 1.05rem; color: #F8FAFC; margin-bottom: 0.4rem;">{diag['title']}</div>
+                                        <div style="font-size: 0.9rem; color: #94A3B8; line-height: 1.4;">{diag['desc']}</div>
+                                    </div>
+                                """, unsafe_allow_html=True)
+
+    # =======================================================
     #                      기존 백테스터 화면
     # =======================================================
     else:
@@ -1069,6 +1335,9 @@ else:
 
         # 1. 티커 및 기간 설정
         st.sidebar.subheader("1. 대상 종목 & 기간")
+        
+        # 실시간 제안 리스트 연동 백테스터 티커 입력창
+        st.sidebar.write("🔍 실시간 티커 사전 위젯을 통해 검색한 정확한 티커명을 아래에 입력하세요.")
         ticker_input = st.sidebar.text_input("주식 티커 입력 (yfinance 규격)", value="AAPL")
         st.sidebar.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ'")
 
