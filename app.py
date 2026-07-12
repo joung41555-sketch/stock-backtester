@@ -40,8 +40,10 @@ st.markdown("""
         font-family: 'Outfit', sans-serif;
     }
     
-    /* 우측 상단 깃허브 버튼, 메뉴 버튼 및 하단 푸터 숨기기 */
-    .stAppDeployButton, header, #MainMenu {
+    /* 우측 상단 배포 버튼, 메뉴 버튼 및 푸터 영역만 숨기고 사이드바 열기 버튼은 보존 */
+    [data-testid="stAppDeployButton"], 
+    [data-testid="stHeaderActionElements"], 
+    #MainMenu {
         visibility: hidden;
         display: none !important;
     }
