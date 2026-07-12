@@ -197,7 +197,7 @@ def get_live_cnn_fear_and_greed():
     실패 시 (None, None) 반환하여 폴백 가동 유도.
     """
     import requests
-    url = "https://r1.cnn.io/fear-and-greed-index/current"
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
