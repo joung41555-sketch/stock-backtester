@@ -89,6 +89,16 @@ st.markdown("""
         border: 1px solid #1E293B;
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
     }
+    
+    /* 미니 주가 카드 스타일 */
+    .spark-card {
+        background-color: #1E293B;
+        border-radius: 12px;
+        padding: 1rem;
+        border: 1px solid #334155;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        margin-bottom: 0.5rem;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -106,6 +116,46 @@ def load_stock_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
         return None
+
+# 최근 30일 미니 스파크라인용 데이터 수집 캐싱
+@st.cache_data(ttl=1800) # 30분 캐싱
+def load_sparkline_data(ticker):
+    try:
+        # 최근 30 영업일의 데이터 다운로드
+        data = yf.download(ticker, period="30d", interval="1d")
+        if data.empty:
+            return None
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        return data
+    except Exception:
+        return None
+
+# ----------------- 미니 스파크라인 그래프 생성 -----------------
+def draw_sparkline(df, is_positive):
+    # 가격 값 추출
+    prices = df['Close'].values.flatten()
+    dates = df.index
+    
+    fig = go.Figure(go.Scatter(
+        x=dates, 
+        y=prices, 
+        line=dict(color='#10B981' if is_positive else '#EF4444', width=2), 
+        mode='lines',
+        hoverinfo='skip'  # 툴팁 숨기기
+    ))
+    
+    fig.update_layout(
+        showlegend=False,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        margin=dict(l=0, r=0, t=5, b=5),
+        height=60,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        dragmode=False
+    )
+    return fig
 
 # ----------------- 백테스트 엔진 -----------------
 def run_backtest(df, short_window, long_window, initial_capital, commission_pct=0.001):
@@ -221,14 +271,66 @@ if not st.session_state['logged_in']:
     st.markdown('<div class="main-title">📊 Dynamic Stock Backtester</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</div>', unsafe_allow_html=True)
 
-    # 중앙 정렬용 레이아웃 구성
+    # 1) 로그인 페이지 상단 실시간 주가 대시보드 추가
+    st.markdown("<h4 style='text-align: center; color: #94A3B8; margin-bottom: 1.5rem;'>📈 주요 시장지표 & 대표주 실시간 현황 (최근 30일 흐름)</h4>", unsafe_allow_html=True)
+    
+    # 대표주 3개 설정
+    dashboard_stocks = [
+        {"name": "Apple (AAPL)", "ticker": "AAPL", "currency": "$"},
+        {"name": "Tesla (TSLA)", "ticker": "TSLA", "currency": "$"},
+        {"name": "삼성전자 (005930.KS)", "ticker": "005930.KS", "currency": "₩"}
+    ]
+    
+    col_a, col_b, col_c = st.columns(3)
+    cols = [col_a, col_b, col_c]
+    
+    for i, stock in enumerate(dashboard_stocks):
+        col = cols[i]
+        stock_data = load_sparkline_data(stock['ticker'])
+        
+        if stock_data is not None and len(stock_data) >= 2:
+            # 주가 값 추출 (멀티인덱스 플래싱 방지)
+            close_prices = stock_data['Close'].values.flatten()
+            
+            curr_price = float(close_prices[-1])
+            prev_price = float(close_prices[-2])
+            
+            change_val = curr_price - prev_price
+            change_pct = (change_val / prev_price) * 100
+            is_positive = change_val >= 0
+            color_hex = "#10B981" if is_positive else "#EF4444"
+            sign = "+" if is_positive else ""
+            arrow = "▲" if is_positive else "▼"
+            
+            # 카드 HTML 렌더링
+            col.markdown(f"""
+                <div class="spark-card">
+                    <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}</div>
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.4rem; margin-bottom: 0.2rem;">
+                        <span style="font-size: 1.6rem; font-weight: 700; color: #F8FAFC;">{stock['currency']}{curr_price:,.2f}</span>
+                        <span style="font-size: 0.9rem; font-weight: 600; color: {color_hex};">
+                            {arrow} {sign}{change_pct:.2f}%
+                        </span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # 스파크라인 렌더링
+            fig = draw_sparkline(stock_data, is_positive)
+            col.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"spark_{stock['ticker']}")
+        else:
+            col.info(f"{stock['name']} 데이터를 불러올 수 없습니다.")
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
+    # 2) 로그인 / 회원가입 입력 영역
     _, center_col, _ = st.columns([1, 1.8, 1])
     
     with center_col:
         st.markdown('<div class="auth-container">', unsafe_allow_html=True)
         tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
         
-        # 1) 로그인 탭
+        # 로그인 탭
         with tab_login:
             st.markdown("<br>", unsafe_allow_html=True)
             login_username = st.text_input("아이디", key="login_user")
@@ -244,7 +346,7 @@ if not st.session_state['logged_in']:
                 else:
                     st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
                     
-        # 2) 회원가입 탭
+        # 회원가입 탭
         with tab_register:
             st.markdown("<br>", unsafe_allow_html=True)
             reg_username = st.text_input("새로운 아이디", key="reg_user")
@@ -280,7 +382,7 @@ else:
         
     st.sidebar.markdown("---")
 
-    # 타이틀 영역 (로그인 후 화면에서는 중앙 정렬 제외)
+    # 타이틀 영역
     st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Dynamic Stock Backtester</h1>', unsafe_allow_html=True)
     st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</p>', unsafe_allow_html=True)
 

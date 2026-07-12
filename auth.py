@@ -2,8 +2,9 @@ import sqlite3
 import hashlib
 import os
 
-# SQLite DB 경로 설정 (프로젝트 루트에 저장)
-DB_PATH = "users.db"
+# SQLite DB 경로 설정 (어떤 환경에서도 항상 동일한 절대 경로 유지)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "users.db")
 # 보안 강화를 위한 솔트(Salt) 값 설정
 PASSWORD_SALT = "antigravity-secure-salt-2026!#"
 
@@ -30,8 +31,11 @@ def register_user(username, password):
     """신규 회원가입 처리"""
     init_db()  # DB 초기화 보장
     
+    username = username.strip()
+    password = password.strip()
+    
     # 공백이나 유효하지 않은 입력 검증
-    if not username.strip() or not password.strip():
+    if not username or not password:
         return False, "아이디와 비밀번호를 모두 입력해 주세요."
         
     conn = sqlite3.connect(DB_PATH)
@@ -57,7 +61,10 @@ def verify_user(username, password):
     """로그인 검증 (아이디/비밀번호 확인)"""
     init_db()  # DB 초기화 보장
     
-    if not username.strip() or not password.strip():
+    username = username.strip()
+    password = password.strip()
+    
+    if not username or not password:
         return False
         
     conn = sqlite3.connect(DB_PATH)
