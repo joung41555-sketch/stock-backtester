@@ -81,15 +81,6 @@ st.markdown("""
         letter-spacing: 0.05em;
     }
     
-    /* 인증 폼 전용 커스텀 스타일 */
-    .auth-container {
-        background-color: #0F172A;
-        border-radius: 16px;
-        padding: 2.5rem;
-        border: 1px solid #1E293B;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-    }
-    
     /* 미니 주가 카드 스타일 */
     .spark-card {
         background-color: #1E293B;
@@ -112,6 +103,11 @@ def load_stock_data(ticker, start_date, end_date):
         # yfinance MultiIndex 컬럼 수정 (단일 티커 조회 시 1차원 컬럼으로 변환)
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
+            
+        # 수정 종가(Adj Close)가 존재하면 이를 가격 기준선으로 덮어씀 (분할/배당 왜곡 방지)
+        if 'Adj Close' in data.columns:
+            data['Close'] = data['Adj Close']
+            
         return data
     except Exception as e:
         st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
@@ -121,19 +117,21 @@ def load_stock_data(ticker, start_date, end_date):
 @st.cache_data(ttl=1800) # 30분 캐싱
 def load_sparkline_data(ticker):
     try:
-        # 최근 30 영업일의 데이터 다운로드
         data = yf.download(ticker, period="30d", interval="1d")
         if data.empty:
             return None
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
+            
+        if 'Adj Close' in data.columns:
+            data['Close'] = data['Adj Close']
+            
         return data
     except Exception:
         return None
 
 # ----------------- 미니 스파크라인 그래프 생성 -----------------
 def draw_sparkline(df, is_positive):
-    # 가격 값 추출
     prices = df['Close'].values.flatten()
     dates = df.index
     
@@ -142,7 +140,7 @@ def draw_sparkline(df, is_positive):
         y=prices, 
         line=dict(color='#10B981' if is_positive else '#EF4444', width=2), 
         mode='lines',
-        hoverinfo='skip'  # 툴팁 숨기기
+        hoverinfo='skip'
     ))
     
     fig.update_layout(
@@ -157,56 +155,59 @@ def draw_sparkline(df, is_positive):
     )
     return fig
 
-# ----------------- 백테스트 엔진 -----------------
-def run_backtest(df, short_window, long_window, initial_capital, commission_pct=0.001):
+# ----------------- 백테스트 엔진 (슬리피지 & 세금 정밀 추가) -----------------
+def run_backtest(df, short_window, long_window, initial_capital, commission_pct=0.001, slippage_pct=0.001, tax_pct=0.0018):
     data = df.copy()
     
     # 이동평균선 계산
     data['Short_SMA'] = data['Close'].rolling(window=short_window).mean()
     data['Long_SMA'] = data['Close'].rolling(window=long_window).mean()
     
-    # 거래 시그널 생성 (1: 매수 신호구간, 0: 매도/현금화 신호구간)
+    # 거래 시그널 생성
     data['Signal'] = np.where(data['Short_SMA'] > data['Long_SMA'], 1, 0)
     
-    # 포지션 (전일 시그널을 기준으로 오늘 매매가 실행됨)
+    # 포지션 (전일 시그널 기준 다음 날 체결)
     data['Position'] = data['Signal'].shift(1).fillna(0)
-    
-    # 포지션 변경 감지 (1: 매수 발생, -1: 매도 발생)
     data['Action'] = data['Position'].diff().fillna(0)
-    
-    # 일별 주가 변동률
     data['Daily_Return'] = data['Close'].pct_change().fillna(0)
     
-    # 포트폴리오 가치 추적 배열
     portfolio_values = []
     cash = initial_capital
     shares = 0.0
-    current_position = 0 # 0: 현금, 1: 주식
+    current_position = 0  # 0: 현금, 1: 주식
     
     prices = data['Close'].values
     positions = data['Position'].values
     actions = data['Action'].values
     
+    # 정밀 복리 계산 (수수료, 세금 및 슬리피지 고려)
     for i in range(len(data)):
         current_price = prices[i]
-        pos = positions[i]
         act = actions[i]
         
-        # 매수 실행
+        # 1) 매수 체결
         if act == 1 and cash > 0:
+            # 슬리피지 반영
+            execution_price = current_price * (1 + slippage_pct)
+            
+            # 수수료 차감 후 매수 가능한 주식 수
             buy_capital = cash * (1 - commission_pct)
-            shares = buy_capital / current_price
+            shares = buy_capital / execution_price
             cash = 0.0
             current_position = 1
         
-        # 매도 실행
+        # 2) 매도 체결
         elif act == -1 and shares > 0:
-            sell_value = shares * current_price
-            cash = sell_value * (1 - commission_pct)
+            # 슬리피지 반영
+            execution_price = current_price * (1 - slippage_pct)
+            
+            # 주식 매도 후 수수료 및 거래세 차감
+            sell_value = shares * execution_price
+            cash = sell_value * (1 - commission_pct - tax_pct)
             shares = 0.0
             current_position = 0
             
-        # 자산 가치 평가
+        # 3) 평가 자산 산정
         if current_position == 1:
             total_value = shares * current_price
         else:
@@ -216,39 +217,46 @@ def run_backtest(df, short_window, long_window, initial_capital, commission_pct=
         
     data['Portfolio_Value'] = portfolio_values
     
-    # 단순 Buy & Hold 수익률 및 자산 가치 계산
+    # 단순 Buy & Hold 자산 가치 계산
     data['Buy_Hold_CumReturn'] = (1 + data['Daily_Return']).cumprod()
     data['Buy_Hold_Value'] = initial_capital * data['Buy_Hold_CumReturn']
     
     return data
 
 # ----------------- 성과 지표 계산 -----------------
-def calculate_metrics(data, initial_capital):
+def calculate_metrics(data, initial_capital, benchmark_data=None):
     final_val = data['Portfolio_Value'].iloc[-1]
     bh_final_val = data['Buy_Hold_Value'].iloc[-1]
     
-    # 누적 수익률
-    total_return = (final_val - initial_capital) / initial_capital * 100
-    bh_return = (bh_final_val - initial_capital) / initial_capital * 100
-    
-    # 영업일 수 계산 및 연도 변환 (252일 기준)
     total_days = len(data)
     years = total_days / 252.0 if total_days > 0 else 1.0
     
-    # 연평균 수익률 (CAGR)
+    # 전략 성과
+    total_return = (final_val - initial_capital) / initial_capital * 100
     cagr = ((final_val / initial_capital) ** (1 / years) - 1) * 100 if years > 0 and final_val > 0 else 0
-    bh_cagr = ((bh_final_val / initial_capital) ** (1 / years) - 1) * 100 if years > 0 and bh_final_val > 0 else 0
-    
-    # 최대 낙폭 (MDD) 계산
     peak = data['Portfolio_Value'].cummax()
-    drawdown = (data['Portfolio_Value'] - peak) / peak
-    mdd = drawdown.min() * 100
+    mdd = ((data['Portfolio_Value'] - peak) / peak).min() * 100
     
+    # Buy & Hold 성과
+    bh_return = (bh_final_val - initial_capital) / initial_capital * 100
+    bh_cagr = ((bh_final_val / initial_capital) ** (1 / years) - 1) * 100 if years > 0 and bh_final_val > 0 else 0
     bh_peak = data['Buy_Hold_Value'].cummax()
-    bh_drawdown = (data['Buy_Hold_Value'] - bh_peak) / bh_peak
-    bh_mdd = bh_drawdown.min() * 100
+    bh_mdd = ((data['Buy_Hold_Value'] - bh_peak) / bh_peak).min() * 100
     
-    # 총 매매 횟수
+    # 벤치마크 성과
+    bench_metrics = None
+    if benchmark_data is not None:
+        bench_final_val = benchmark_data['Benchmark_Value'].iloc[-1]
+        bench_return = (bench_final_val - initial_capital) / initial_capital * 100
+        bench_cagr = ((bench_final_val / initial_capital) ** (1 / years) - 1) * 100 if years > 0 and bench_final_val > 0 else 0
+        bench_peak = benchmark_data['Benchmark_Value'].cummax()
+        bench_mdd = ((benchmark_data['Benchmark_Value'] - bench_peak) / bench_peak).min() * 100
+        bench_metrics = {
+            "return": bench_return,
+            "cagr": bench_cagr,
+            "mdd": bench_mdd
+        }
+        
     trade_count = int(data['Action'].abs().sum())
     
     return {
@@ -260,38 +268,49 @@ def calculate_metrics(data, initial_capital):
         "bh_return": bh_return,
         "bh_cagr": bh_cagr,
         "bh_mdd": bh_mdd,
+        "bench_metrics": bench_metrics,
         "trade_count": trade_count
     }
 
-# =======================================================
-#                      로그인 / 회원가입 제어
-# =======================================================
-if not st.session_state['logged_in']:
-    # 타이틀 영역
-    st.markdown('<div class="main-title">📊 Dynamic Stock Backtester</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</div>', unsafe_allow_html=True)
-
-    # 1) 로그인 페이지 상단 실시간 주가 대시보드 추가
-    st.markdown("<h4 style='text-align: center; color: #94A3B8; margin-bottom: 1.5rem;'>📈 주요 시장지표 & 대표주 실시간 현황 (최근 30일 흐름)</h4>", unsafe_allow_html=True)
-    
-    # 대표주 3개 설정
-    dashboard_stocks = [
-        {"name": "Apple (AAPL)", "ticker": "AAPL", "currency": "$"},
-        {"name": "Tesla (TSLA)", "ticker": "TSLA", "currency": "$"},
-        {"name": "삼성전자 (005930.KS)", "ticker": "005930.KS", "currency": "₩"}
+# ----------------- 로그인 전 전용: 실시간 주가 순환 컴포넌트 (st.fragment) -----------------
+@st.fragment(run_every=10)
+def render_live_dashboard():
+    if 'dash_index' not in st.session_state:
+        st.session_state['dash_index'] = 0
+        
+    # 순환 렌더링할 3대 테마 주식 그룹 정의
+    dashboard_stocks_groups = [
+        # 그룹 1: 미 기술 자이언트 (M7 일부)
+        [
+            {"name": "Apple (AAPL)", "ticker": "AAPL", "currency": "$"},
+            {"name": "Nvidia (NVDA)", "ticker": "NVDA", "currency": "$"},
+            {"name": "Microsoft (MSFT)", "ticker": "MSFT", "currency": "$"}
+        ],
+        # 그룹 2: 반도체 & 메모리 핵심 기업
+        [
+            {"name": "삼성전자 (005930.KS)", "ticker": "005930.KS", "currency": "₩"},
+            {"name": "SK하이닉스 (000660.KS)", "ticker": "000660.KS", "currency": "₩"},
+            {"name": "TSMC (TSM)", "ticker": "TSM", "currency": "$"}
+        ],
+        # 그룹 3: 차세대 플랫폼 및 전기차
+        [
+            {"name": "Tesla (TSLA)", "ticker": "TSLA", "currency": "$"},
+            {"name": "Alphabet (GOOGL)", "ticker": "GOOGL", "currency": "$"},
+            {"name": "Meta (META)", "ticker": "META", "currency": "$"}
+        ]
     ]
+    
+    current_group = dashboard_stocks_groups[st.session_state['dash_index']]
     
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
     
-    for i, stock in enumerate(dashboard_stocks):
+    for i, stock in enumerate(current_group):
         col = cols[i]
         stock_data = load_sparkline_data(stock['ticker'])
         
         if stock_data is not None and len(stock_data) >= 2:
-            # 주가 값 추출 (멀티인덱스 플래싱 방지)
             close_prices = stock_data['Close'].values.flatten()
-            
             curr_price = float(close_prices[-1])
             prev_price = float(close_prices[-2])
             
@@ -302,7 +321,6 @@ if not st.session_state['logged_in']:
             sign = "+" if is_positive else ""
             arrow = "▲" if is_positive else "▼"
             
-            # 카드 HTML 렌더링
             col.markdown(f"""
                 <div class="spark-card">
                     <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}</div>
@@ -315,56 +333,76 @@ if not st.session_state['logged_in']:
                 </div>
             """, unsafe_allow_html=True)
             
-            # 스파크라인 렌더링
+            # 10초마다 갱신을 인지시키기 위해 차트 key에 고유 해시 인덱스 부여
             fig = draw_sparkline(stock_data, is_positive)
-            col.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"spark_{stock['ticker']}")
+            col.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                config={'displayModeBar': False}, 
+                key=f"spark_{stock['ticker']}_{st.session_state['dash_index']}"
+            )
         else:
             col.info(f"{stock['name']} 데이터를 불러올 수 없습니다.")
+            
+    # 인덱스 순환
+    st.session_state['dash_index'] = (st.session_state['dash_index'] + 1) % len(dashboard_stocks_groups)
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # 2) 로그인 / 회원가입 입력 영역
+# =======================================================
+#                      로그인 / 회원가입 제어
+# =======================================================
+if not st.session_state['logged_in']:
+    # 타이틀 영역
+    st.markdown('<div class="main-title">📊 Dynamic Stock Backtester</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</div>', unsafe_allow_html=True)
+
+    # 1) 로그인 페이지 상단 실시간 주가 대시보드 (10초 자동 독립 회전 프래그먼트 호출)
+    st.markdown("<h4 style='text-align: center; color: #94A3B8; margin-bottom: 1.5rem;'>📈 주요 시장지표 & 대표주 실시간 현황 (10초 자동 순환)</h4>", unsafe_allow_html=True)
+    render_live_dashboard()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 2) 로그인 / 회원가입 입력 영역 (검은 상자 완전 지우고 st.container 테두리로 튜닝)
     _, center_col, _ = st.columns([1, 1.8, 1])
     
     with center_col:
-        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
-        tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
-        
-        # 로그인 탭
-        with tab_login:
-            st.markdown("<br>", unsafe_allow_html=True)
-            login_username = st.text_input("아이디", key="login_user")
-            login_password = st.text_input("비밀번호", type="password", key="login_pass")
-            st.markdown("<br>", unsafe_allow_html=True)
+        # Streamlit 내장 컨테이너로 감싸 검은 상자 중복 오류 완전 제거
+        with st.container(border=True):
+            tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
             
-            if st.button("로그인", use_container_width=True, type="primary"):
-                if auth.verify_user(login_username, login_password):
-                    st.session_state['logged_in'] = True
-                    st.session_state['username'] = login_username
-                    st.success("로그인에 성공했습니다! 페이지를 로드 중...")
-                    st.rerun()
-                else:
-                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
-                    
-        # 회원가입 탭
-        with tab_register:
-            st.markdown("<br>", unsafe_allow_html=True)
-            reg_username = st.text_input("새로운 아이디", key="reg_user")
-            reg_password = st.text_input("새로운 비밀번호", type="password", key="reg_pass")
-            reg_password_confirm = st.text_input("비밀번호 확인", type="password", key="reg_pass_conf")
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            if st.button("회원가입", use_container_width=True):
-                if reg_password != reg_password_confirm:
-                    st.error("비밀번호와 비밀번호 확인이 서로 일치하지 않습니다.")
-                else:
-                    success, msg = auth.register_user(reg_username, reg_password)
-                    if success:
-                        st.success(msg)
+            # 로그인 탭
+            with tab_login:
+                st.markdown("<br>", unsafe_allow_html=True)
+                login_username = st.text_input("아이디", key="login_user")
+                login_password = st.text_input("비밀번호", type="password", key="login_pass")
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                if st.button("로그인", use_container_width=True, type="primary"):
+                    if auth.verify_user(login_username, login_password):
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = login_username
+                        st.success("로그인에 성공했습니다! 페이지를 로드 중...")
+                        st.rerun()
                     else:
-                        st.error(msg)
+                        st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
                         
-        st.markdown('</div>', unsafe_allow_html=True)
+            # 회원가입 탭
+            with tab_register:
+                st.markdown("<br>", unsafe_allow_html=True)
+                reg_username = st.text_input("새로운 아이디", key="reg_user")
+                reg_password = st.text_input("새로운 비밀번호", type="password", key="reg_pass")
+                reg_password_confirm = st.text_input("비밀번호 확인", type="password", key="reg_pass_conf")
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                if st.button("회원가입", use_container_width=True):
+                    if reg_password != reg_password_confirm:
+                        st.error("비밀번호와 비밀번호 확인이 서로 일치하지 않습니다.")
+                    else:
+                        success, msg = auth.register_user(reg_username, reg_password)
+                        if success:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
 
 # =======================================================
 #                      메인 애플리케이션 화면
@@ -373,7 +411,6 @@ else:
     # 사이드바 설정 영역
     st.sidebar.header("⚙️ 백테스트 설정")
     
-    # 사용자 정보 및 로그아웃 버튼 노출
     st.sidebar.markdown(f"👤 **{st.session_state['username']}**님 환영합니다!")
     if st.sidebar.button("🔓 로그아웃", use_container_width=True):
         st.session_state['logged_in'] = False
@@ -384,25 +421,34 @@ else:
 
     # 타이틀 영역
     st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Dynamic Stock Backtester</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</p>', unsafe_allow_html=True)
+    st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">수정 종가(Adjusted Close)와 정밀한 슬리피지/세금을 반영한 실전용 백테스터</p>', unsafe_allow_html=True)
 
     # 1. 티커 및 기간 설정
     st.sidebar.subheader("1. 대상 종목 & 기간")
     ticker_input = st.sidebar.text_input("주식 티커 입력 (yfinance 규격)", value="AAPL")
-    st.sidebar.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ' 형식으로 입력하세요.")
+    st.sidebar.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ'")
 
     today = datetime.today()
-    default_start = today - timedelta(days=365 * 3) # 기본 3년 전
+    default_start = today - timedelta(days=365 * 3)
     start_date = st.sidebar.date_input("시작일", default_start)
     end_date = st.sidebar.date_input("종료일", today)
 
     # 2. 투자 조건 설정
-    st.sidebar.subheader("2. 투자 조건")
+    st.sidebar.subheader("2. 실전 투자 조건")
     initial_capital = st.sidebar.number_input("초기 투자금 ($ 또는 ₩)", min_value=1000, value=10000, step=1000)
-    commission_pct = st.sidebar.slider("거래 수수료 (%)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
+    commission_pct = st.sidebar.slider("증권사 수수료 (%)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
+    slippage_pct = st.sidebar.slider("슬리피지 (Slippage, %)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
+    tax_pct = st.sidebar.slider("거래세 (Tax, %)", min_value=0.0, max_value=1.0, value=0.18, step=0.02) / 100.0
 
-    # 3. SMA 변수 설정
-    st.sidebar.subheader("3. 이동평균선(SMA) 설정")
+    # 3. 벤치마크 지수 설정
+    st.sidebar.subheader("3. 비교 벤치마크 지수")
+    benchmark_option = st.sidebar.selectbox(
+        "비교 대상 시장 지수", 
+        ["선택 안 함", "S&P 500 (^GSPC)", "Nasdaq 100 (QQQ)", "KOSPI (^KS11)", "KOSDAQ (^KQ11)"]
+    )
+
+    # 4. SMA 변수 설정
+    st.sidebar.subheader("4. 이동평균선(SMA) 설정")
     short_window = st.sidebar.number_input("단기 이평선 기간 (일)", min_value=2, max_value=100, value=20)
     long_window = st.sidebar.number_input("장기 이평선 기간 (일)", min_value=5, max_value=300, value=50)
 
@@ -424,11 +470,23 @@ else:
                 df = load_stock_data(ticker_input, start_date, end_date)
                 
                 if df is None or len(df) < long_window:
-                    st.error("데이터를 불러오지 못했거나 백테스트를 위한 충분한 역사적 데이터(장기 이평선 기준 이상)가 없습니다. 티커 및 날짜 범위를 확인해 주세요.")
+                    st.error("데이터를 불러오지 못했거나 백테스트를 위한 충분한 역사적 데이터가 없습니다.")
                 else:
+                    # 벤치마크 데이터 로딩 및 계산
+                    benchmark_df = None
+                    if benchmark_option != "선택 안 함":
+                        bench_ticker = benchmark_option.split("(")[-1].replace(")", "")
+                        bench_raw = load_stock_data(bench_ticker, start_date, end_date)
+                        if bench_raw is not None and not bench_raw.empty:
+                            benchmark_df = pd.DataFrame(index=df.index)
+                            benchmark_df = benchmark_df.join(bench_raw['Close'], how='left').ffill().bfill()
+                            benchmark_df['Daily_Return'] = benchmark_df['Close'].pct_change().fillna(0)
+                            benchmark_df['Benchmark_CumReturn'] = (1 + benchmark_df['Daily_Return']).cumprod()
+                            benchmark_df['Benchmark_Value'] = initial_capital * benchmark_df['Benchmark_CumReturn']
+
                     # 백테스트 수행
-                    results = run_backtest(df, short_window, long_window, initial_capital, commission_pct)
-                    metrics = calculate_metrics(results, initial_capital)
+                    results = run_backtest(df, short_window, long_window, initial_capital, commission_pct, slippage_pct, tax_pct)
+                    metrics = calculate_metrics(results, initial_capital, benchmark_df)
                     
                     # 결과 지표 대시보드
                     st.markdown("### 🏆 백테스트 성과 지표 비교")
@@ -446,13 +504,19 @@ else:
                             unsafe_allow_html=True
                         )
                     
+                    bench_cagr_str = ""
+                    bench_mdd_str = ""
+                    if metrics['bench_metrics'] is not None:
+                        bench_cagr_str = f" / 벤치마크: {metrics['bench_metrics']['cagr']:.2f}%"
+                        bench_mdd_str = f" / 벤치마크: {metrics['bench_metrics']['mdd']:.2f}%"
+                    
                     with col2:
                         st.markdown(
                             f"""<div class="metric-card">
                                 <div class="metric-label">연평균 수익률 (CAGR)</div>
                                 <div class="metric-value">{metrics['cagr']:.2f}%</div>
                                 <div style="color: #94A3B8; font-size: 0.85rem;">
-                                    시장 평균(B&H): {metrics['bh_cagr']:.2f}%
+                                    시장 평균(B&H): {metrics['bh_cagr']:.2f}%{bench_cagr_str}
                                 </div>
                             </div>""", 
                             unsafe_allow_html=True
@@ -464,7 +528,7 @@ else:
                                 <div class="metric-label">최대 낙폭 (MDD)</div>
                                 <div class="metric-value" style="color: #EF4444;">{metrics['mdd']:.2f}%</div>
                                 <div style="color: #94A3B8; font-size: 0.85rem;">
-                                    시장 평균(B&H): {metrics['bh_mdd']:.2f}%
+                                    시장 평균(B&H): {metrics['bh_mdd']:.2f}%{bench_mdd_str}
                                 </div>
                             </div>""", 
                             unsafe_allow_html=True
@@ -476,7 +540,7 @@ else:
                                 <div class="metric-label">총 매매 횟수</div>
                                 <div class="metric-value" style="color: #3B82F6;">{metrics['trade_count']} 회</div>
                                 <div style="color: #94A3B8; font-size: 0.85rem;">
-                                    수수료 적용: {commission_pct*100:.2f}% / 거래
+                                    슬리피지: {slippage_pct*100:.2f}% / 세금: {tax_pct*100:.2f}%
                                 </div>
                             </div>""", 
                             unsafe_allow_html=True
@@ -538,6 +602,13 @@ else:
                         go.Scatter(x=results.index, y=results['Buy_Hold_Value'], name='Buy & Hold', line=dict(color='#7F8C8D', width=1.5, dash='dot')),
                         row=2, col=1
                     )
+                    
+                    # 벤치마크 가치 곡선 오버레이
+                    if benchmark_df is not None:
+                        fig.add_trace(
+                            go.Scatter(x=benchmark_df.index, y=benchmark_df['Benchmark_Value'], name=benchmark_option, line=dict(color='#9B59B6', width=1.5, dash='dashdot')),
+                            row=2, col=1
+                        )
                     
                     # 차트 레이아웃 스타일 설정
                     fig.update_layout(
