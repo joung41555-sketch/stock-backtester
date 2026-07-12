@@ -1562,11 +1562,20 @@ else:
                             # 비중 속성 연산
                             total_amt = df_res['평가금액'].sum()
                             if total_amt > 0:
-                                # 고위험 티커 매핑 (TQQQ, SOXL, SQQQ 등)
+                                # 사용자의 실제 보유 종목들을 파싱
+                                user_holdings = []
+                                for _, r in df_res.iterrows():
+                                    user_holdings.append({
+                                        "ticker": r['티커'],
+                                        "amount": r['평가금액'],
+                                        "weight": (r['평가금액'] / total_amt) * 100
+                                    })
+                                
+                                # 고위험 티커 목록
                                 high_risk_tickers = ["TQQQ", "SOXL", "SQQQ", "QLD", "IBIT", "COIN", "TSLA"]
-                                # 안전 티커 매핑 (TLT, IEF, SHY, SCHD, JEPI, O)
+                                # 안전 티커 목록
                                 safe_tickers = ["TLT", "IEF", "SHY", "SCHD", "JEPI", "O", "IAU", "GLD"]
-                                # 지수/성장 티커 매핑 (QQQ, SPY, VOO, IVV, AAPL, MSFT, GOOG, NVDA)
+                                # 지수/성장 티커 목록
                                 growth_tickers = ["QQQ", "SPY", "VOO", "IVV", "AAPL", "MSFT", "GOOG", "NVDA"]
                                 
                                 high_risk_sum = df_res[df_res['티커'].isin(high_risk_tickers)]['평가금액'].sum()
@@ -1583,95 +1592,135 @@ else:
                                     style_color = "#FF4B4B"
                                     style_desc = f"현재 전체 포트폴리오의 <b>{high_risk_pct:.1f}%</b>를 레버리지/인버스/밈주 등 초고위험 변동성 자산에 배정하고 계십니다. 시장 상승 시 수익률은 극대화되나, 하락 또는 횡보장 시 복리 누수(Volatility Drag)로 원금이 급격히 녹아내릴 위험이 매우 높은 화끈한 공격형 투자 성향입니다."
                                     
-                                    # Model A (성향 매칭 보완형 - 변동성 제어형 지수 성장)
-                                    model_a_name = "Model A: 마일드 테크 성장 포트폴리오 (성향 부합형)"
-                                    model_a_desc = "레버리지는 전부 배제하되, 시장 선도 메가캡과 나스닥 지수를 정밀 구성하여 변동성 복리 누수를 철저히 통제하면서 장기 복리 극대화를 실현하는 성장 중심 배분 모델입니다."
-                                    model_a_assets = [
-                                        {"ticker": "SPY (S&P 500)", "weight": 50.0},
-                                        {"ticker": "QQQ (나스닥 100)", "weight": 35.0},
-                                        {"ticker": "TLT (미국 장기채)", "weight": 15.0}
-                                    ]
+                                    # [Model A: 내 종목 비중 최적화 조율형]
+                                    model_a_name = "Model A: 내 자산 기반 리스크 제어 포트폴리오 (성향 부합형)"
+                                    model_a_desc = "사용자님이 고르신 종목의 개성을 보존하되, TQQQ/SOXL 등 초고위험군의 비중을 총합 15% 이하로 낮추고 지수형 자산(SPY)과 헤지 수단(TLT)을 결합하여 복리 잠식 위험을 제어한 설계안입니다."
                                     
-                                    # Model B (반대 성향 보완형 - 극강의 저변동 배당 철벽)
-                                    model_b_name = "Model B: 수비형 고배당 배당성장 포트 (반대 성향형)"
-                                    model_b_desc = "공격적인 성장 대신 현금 흐름과 원금 방어력을 극대화하여 마켓 크래시(공황) 상황에서도 월별 배당금(달러)을 수급받아 계좌를 안전하게 지켜내는 전통적 철벽 포트폴리오입니다."
-                                    model_b_assets = [
-                                        {"ticker": "SCHD (배당성장)", "weight": 50.0},
-                                        {"ticker": "TLT (미 장기채)", "weight": 30.0},
-                                        {"ticker": "GLD (안전자산 금)", "weight": 20.0}
-                                    ]
+                                    scaled_holdings = []
+                                    remaining_weight = 100.0
+                                    for h in user_holdings:
+                                        if h['ticker'] in high_risk_tickers:
+                                            allocated = min(h['weight'], 7.0)
+                                            scaled_holdings.append({"ticker": h['ticker'], "weight": allocated})
+                                            remaining_weight -= allocated
+                                        else:
+                                            allocated = h['weight'] * 0.6
+                                            scaled_holdings.append({"ticker": h['ticker'], "weight": allocated})
+                                            remaining_weight -= allocated
+                                            
+                                    spy_weight = max(10.0, remaining_weight * 0.6)
+                                    tlt_weight = max(5.0, remaining_weight * 0.4)
+                                    
+                                    temp_sum = sum(sh['weight'] for sh in scaled_holdings) + spy_weight + tlt_weight
+                                    model_a_assets = []
+                                    for sh in scaled_holdings:
+                                        model_a_assets.append({"ticker": f"내 자산: {sh['ticker']}", "weight": (sh['weight'] / temp_sum) * 100})
+                                    model_a_assets.append({"ticker": "SPY (S&P 500 지수)", "weight": (spy_weight / temp_sum) * 100})
+                                    model_a_assets.append({"ticker": "TLT (미 장기채)", "weight": (tlt_weight / temp_sum) * 100})
+                                    
+                                    # [Model B: 반대 성향 하이브리드 보완형]
+                                    model_b_name = "Model B: 내 우량 자산 & 철벽 배당 믹스 포트 (반대 성향형)"
+                                    model_b_desc = "사용자님의 종목 중 고위험 레버리지를 제외한 우량 자산(20% 비중)만 유지하고, 나머지 80%를 매월 현금이 꽂히는 SCHD 및 채권/금 등의 인컴형 배당 포트로 믹싱하여 하방 수비력을 극대화한 대안입니다."
+                                    
+                                    model_b_assets = []
+                                    non_leveraged = [h for h in user_holdings if h['ticker'] not in high_risk_tickers]
+                                    temp_wt = 0.0
+                                    if non_leveraged:
+                                        for nl in non_leveraged[:3]:
+                                            allocated = 20.0 / min(3, len(non_leveraged))
+                                            model_b_assets.append({"ticker": f"내 우량주: {nl['ticker']}", "weight": allocated})
+                                            temp_wt += allocated
+                                    else:
+                                        model_b_assets.append({"ticker": "내 자산 대체: SPY", "weight": 20.0})
+                                        temp_wt += 20.0
+                                        
+                                    model_b_assets.append({"ticker": "SCHD (배당성장)", "weight": 40.0 * ((100.0 - temp_wt) / 80.0)})
+                                    model_b_assets.append({"ticker": "TLT (미 장기채)", "weight": 30.0 * ((100.0 - temp_wt) / 80.0)})
+                                    model_b_assets.append({"ticker": "GLD (안전자산 금)", "weight": 10.0 * ((100.0 - temp_wt) / 80.0)})
                                     
                                 elif safe_pct >= 30.0 or hhi_status == "다각화 우수":
                                     user_style = "안정추구형 (Conservative Balanced)"
                                     style_color = "#10B981"
                                     style_desc = f"현재 포트폴리오의 <b>{safe_pct:.1f}%</b>를 고배당/채권형 안전 자산에 배정해 우수한 HHI 다각화 등급을 보이고 있습니다. 자산 방어력과 MDD 억제 성능은 극도로 훌륭하나, 강세장이나 장기 성장 국면에서 시장 평균(지수) 대비 자산의 복리 증식 속도가 아쉬울 수 있는 수비형 성향입니다."
                                     
-                                    # Model A (성향 매칭 보완형 - 인플레이션 방어형 자산배분)
-                                    model_a_name = "Model A: 자산 배분 올웨더 배당 포트 (성향 부합형)"
-                                    model_a_desc = "원금 방어라는 기본 철학을 완수하기 위해 전통 주식 외에 채권과 실물 안전자산(금)을 적절히 배합하여 연간 변동성을 7% 미만으로 틀어막는 배당형 수비 포트폴리오입니다."
-                                    model_a_assets = [
-                                        {"ticker": "SCHD (배당성장)", "weight": 40.0},
-                                        {"ticker": "SPY (S&P 500)", "weight": 30.0},
-                                        {"ticker": "TLT (미 장기채)", "weight": 20.0},
-                                        {"ticker": "GLD (안전자산 금)", "weight": 10.0}
-                                    ]
+                                    # [Model A: 내 종목 비중 최적화 조율형]
+                                    model_a_name = "Model A: 내 안전 자산 기반 하방 방어 포트 (성향 부합형)"
+                                    model_a_desc = "사용자님이 고르신 안전 자산 중심의 종목 비중을 60% 유지하면서, 인플레이션 극복 능력을 키우기 위해 글로벌 대표 주식 지수(SPY)와 원자재 금(GLD)을 정교하게 추가 연동한 포트폴리오입니다."
                                     
-                                    # Model B (반대 성향 보완형 - 적극적 자산 증식 성장형)
-                                    model_b_name = "Model B: 나스닥 기술성장 알파 포트 (반대 성향형)"
-                                    model_b_desc = "수비 위주에서 완전히 탈피하여 미국 최첨단 기술 모멘텀 기업들과 글로벌 지수의 무한한 성장에 편승하여 자본금의 CAGR(복리 수익률)을 적극적으로 높여주는 시장 우위 모델입니다."
-                                    model_b_assets = [
-                                        {"ticker": "QQQ (나스닥 100)", "weight": 50.0},
-                                        {"ticker": "SPY (S&P 500)", "weight": 30.0},
-                                        {"ticker": "NVDA / AAPL (빅테크)", "weight": 20.0}
-                                    ]
+                                    model_a_assets = []
+                                    for h in user_holdings[:4]:
+                                        allocated = 60.0 / min(4, len(user_holdings))
+                                        model_a_assets.append({"ticker": f"내 자산: {h['ticker']}", "weight": allocated})
+                                    model_a_assets.append({"ticker": "SPY (S&P 500 지수)", "weight": 30.0})
+                                    model_a_assets.append({"ticker": "GLD (안전자산 금)", "weight": 10.0})
+                                    
+                                    # [Model B: 반대 성향 하이브리드 보완형]
+                                    model_b_name = "Model B: 내 자산 & 나스닥 기술성장 알파 믹스 (반대 성향형)"
+                                    model_b_desc = "지나친 보수성에서 벗어나 사용자님의 기존 보유 종목을 안전 버퍼(20% 비중)로 남겨두고, 나머지는 미국 최첨단 반도체 및 나스닥 100 고성장 기업 비중을 실어 복리 성장을 대폭 강화한 대안입니다."
+                                    
+                                    model_b_assets = []
+                                    for h in user_holdings[:3]:
+                                        allocated = 20.0 / min(3, len(user_holdings))
+                                        model_b_assets.append({"ticker": f"내 안전자산: {h['ticker']}", "weight": allocated})
+                                    model_b_assets.append({"ticker": "QQQ (나스닥 100)", "weight": 50.0})
+                                    model_b_assets.append({"ticker": "SPY (S&P 500)", "weight": 20.0})
+                                    model_b_assets.append({"ticker": "SOXX (필라델피아 반도체)", "weight": 10.0})
                                     
                                 elif growth_pct >= 50.0:
                                     user_style = "적극투자형 (Growth Oriented)"
                                     style_color = "#3B82F6"
                                     style_desc = f"현재 포트폴리오의 <b>{growth_pct:.1f}%</b>를 나스닥/S&P500 등 지수 추종과 메가캡 주식 위주로 투자 중입니다. 미국 자본주의 장기 우상향에 정석적으로 투자하고 있으나, 대형 매크로 긴축이나 경기 위기 국면에 들어섰을 때 전체 자산이 지수 낙폭만큼 그대로 노출되는 특징을 가집니다."
                                     
-                                    # Model A (성향 매칭 보완형 - 마일드 헷지 포트폴리오)
-                                    model_a_name = "Model A: 지수 성장 & 헤지 포트폴리오 (성향 부합형)"
-                                    model_a_desc = "적극적인 주식 성장을 그대로 취하되, 역사적 위기 시 계좌의 완충재 역할을 해주는 금과 채권을 최소한의 방어선(20%)으로 탑재하여 위기 극복력을 극대화한 정석적 포트입니다."
-                                    model_a_assets = [
-                                        {"ticker": "SPY (S&P 500)", "weight": 40.0},
-                                        {"ticker": "QQQ (나스닥 100)", "weight": 40.0},
-                                        {"ticker": "TLT (미 장기채)", "weight": 10.0},
-                                        {"ticker": "GLD (안전자산 금)", "weight": 10.0}
-                                    ]
+                                    # [Model A: 내 종목 비중 최적화 조율형]
+                                    model_a_name = "Model A: 내 우량 성장주 & 헤지 자산배분 (성향 부합형)"
+                                    model_a_desc = "사용자님이 구성하신 나스닥 및 성장주 코어를 70% 비중으로 든든하게 유지하고, 경기 침체 시의 급락을 완충해 주는 금(GLD)과 장기채(TLT)를 30% 배합하여 변동성 통제력을 획득한 모델입니다."
                                     
-                                    # Model B (반대 성향 보완형 - 월배당 달러 인컴 모델)
-                                    model_b_name = "Model B: 고정 현금 흐름 인컴 포트 (반대 성향형)"
+                                    model_a_assets = []
+                                    for h in user_holdings[:4]:
+                                        allocated = 70.0 / min(4, len(user_holdings))
+                                        model_a_assets.append({"ticker": f"내 성장주: {h['ticker']}", "weight": allocated})
+                                    model_a_assets.append({"ticker": "TLT (미 장기채)", "weight": 15.0})
+                                    model_a_assets.append({"ticker": "GLD (안전자산 금)", "weight": 15.0})
+                                    
+                                    # [Model B: 반대 성향 하이브리드 보완형]
+                                    model_b_name = "Model B: 내 성장주 & 고정 달러 인컴 하이브리드 (반대 성향형)"
                                     model_b_desc = "단순한 미래 시세 차익 대신 매월 주식 계좌에 마르지 않는 현금 배당(달러)이 꽂히게 유도하여 하락 횡보장에서도 안정적으로 배당금을 재투자하는 파이프라인 형성형 포트폴리오입니다."
-                                    model_b_assets = [
-                                        {"ticker": "SCHD (배당성장)", "weight": 50.0},
-                                        {"ticker": "JEPI (커버드콜 배당)", "weight": 30.0},
-                                        {"ticker": "O (리츠 월배당)", "weight": 20.0}
-                                    ]
+                                    
+                                    model_b_assets = []
+                                    for h in user_holdings[:3]:
+                                        allocated = 20.0 / min(3, len(user_holdings))
+                                        model_b_assets.append({"ticker": f"내 성장주: {h['ticker']}", "weight": allocated})
+                                    model_b_assets.append({"ticker": "SCHD (배당성장)", "weight": 40.0})
+                                    model_b_assets.append({"ticker": "JEPI (커버드콜 고배당)", "weight": 25.0})
+                                    model_b_assets.append({"ticker": "O (리츠 월배당)", "weight": 15.0})
                                     
                                 else:
                                     user_style = "중립투자형 (Moderate Standard)"
                                     style_color = "#AB63FA"
                                     style_desc = "현재 특정 자산군(레버리지, 안전 자산 등)에 큰 편중이 없이 중립적인 주식 비중을 이루고 계십니다. 자산 배분의 균형이 잡혀 있으나 시장 급변동 시 개별 자산의 리스크 노출 정도를 수시로 모니터링해야 합니다."
                                     
-                                    # Model A (성향 매칭 보완형 - 글로벌 스탠다드 균형포트)
-                                    model_a_name = "Model A: 미국 시장 6대4 균형 배분 포트 (성향 부합형)"
-                                    model_a_desc = "전 세계 기관투자자들의 벤치마크이자 가장 역사가 증명한 주식 60%, 채권 40%의 황금 배율을 미국 대형 지수를 통해 직관적으로 재현한 표준 분산 모델입니다."
-                                    model_a_assets = [
-                                        {"ticker": "SPY (S&P 500)", "weight": 60.0},
-                                        {"ticker": "TLT (미 장기채)", "weight": 30.0},
-                                        {"ticker": "GLD (안전자산 금)", "weight": 10.0}
-                                    ]
+                                    # [Model A: 내 종목 비중 최적화 조율형]
+                                    model_a_name = "Model A: 내 자산 기반 자산 배분 표준포트 (성향 부합형)"
+                                    model_a_desc = "사용자님이 고르신 자산 비중을 60%로 메인 유지하면서, 금융 시장의 다양한 시나리오에 대비하기 위해 미 장기채와 금 자산을 40% 혼합한 표준적 중립 리밸런싱 포트폴리오입니다."
                                     
-                                    # Model B (반대 성향 보완형 - 글로벌 올웨더 헤지 모델)
-                                    model_b_name = "Model B: 4계절 전천후 올웨더 포트 (반대 성향형)"
-                                    model_b_desc = "주식 시장 상승뿐만 아니라 인플레이션, 스태그플레이션, 경기 위기 등 어떠한 거시 국면에서도 계좌가 박살 나지 않도록 주식 비중을 30% 이하로 통제하는 극보수 분산 포트입니다."
-                                    model_b_assets = [
-                                        {"ticker": "TLT / IEF (국채 혼합)", "weight": 40.0},
-                                        {"ticker": "SPY (S&P 500 주식)", "weight": 30.0},
-                                        {"ticker": "GLD (안전자산 금)", "weight": 20.0},
-                                        {"ticker": "DBC (원자재 대체자산)", "weight": 10.0}
-                                    ]
+                                    model_a_assets = []
+                                    for h in user_holdings[:4]:
+                                        allocated = 60.0 / min(4, len(user_holdings))
+                                        model_a_assets.append({"ticker": f"내 자산: {h['ticker']}", "weight": allocated})
+                                    model_a_assets.append({"ticker": "TLT (미 장기채)", "weight": 25.0})
+                                    model_a_assets.append({"ticker": "GLD (안전자산 금)", "weight": 15.0})
+                                    
+                                    # [Model B: 반대 성향 하이브리드 보완형]
+                                    model_b_name = "Model B: 내 자산 & 전천후 올웨더 자산배분 (반대 성향형)"
+                                    model_b_desc = "주식 시장의 폭락기에도 원금을 절대적으로 보전하기 위해 사용자님의 기존 종목 비중을 20%로 줄이고, 상관관계가 극도로 낮은 금과 미국 단기/중기채권 및 원자재 대체자산을 대폭 배합한 전천후 수비형 대안입니다."
+                                    
+                                    model_b_assets = []
+                                    for h in user_holdings[:3]:
+                                        allocated = 20.0 / min(3, len(user_holdings))
+                                        model_b_assets.append({"ticker": f"내 자산: {h['ticker']}", "weight": allocated})
+                                    model_b_assets.append({"ticker": "TLT / IEF (국채 혼합)", "weight": 40.0})
+                                    model_b_assets.append({"ticker": "GLD (안전자산 금)", "weight": 25.0})
+                                    model_b_assets.append({"ticker": "DBC (원자재 대체자산)", "weight": 15.0})
                                     
                                 # 성향 요약 카드 출력
                                 st.markdown(f"""
@@ -1719,8 +1768,6 @@ else:
                                             </div>
                                         </div>
                                     """, unsafe_allow_html=True)
-
-
     # =======================================================
     #            🚨 시장 위험 지표 모니터링 대시보드
     # =======================================================
