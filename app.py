@@ -562,6 +562,11 @@ else:
         users_raw = auth.get_all_users()
         df_users = pd.DataFrame(users_raw, columns=["사용자 ID", "이메일 주소", "가입 일시"])
         
+        # admin 계정이 회원 가입 상세현황 표의 제일 위에 배치되도록 강제 정렬
+        df_admin = df_users[df_users["사용자 ID"].str.lower() == "admin"]
+        df_others = df_users[df_users["사용자 ID"].str.lower() != "admin"]
+        df_users = pd.concat([df_admin, df_others]).reset_index(drop=True)
+        
         col_m1, col_m2 = st.columns([1, 3])
         with col_m1:
             st.markdown(
