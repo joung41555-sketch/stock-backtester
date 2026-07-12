@@ -7,6 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import auth  # 사용자 정의 인증 모듈 임포트
 import random
+import string
 
 # 페이지 설정
 st.set_page_config(
@@ -109,11 +110,11 @@ def load_stock_data(ticker, start_date, end_date):
         data = yf.download(ticker, start=start_date, end=end_date)
         if data.empty:
             return None
-        # yfinance MultiIndex 컬럼 수정 (단일 티커 조회 시 1차원 컬럼으로 변환)
+        # yfinance MultiIndex 컬럼 수정
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
-        # 수정 종가(Adj Close)가 존재하면 이를 가격 기준선으로 덮어씀 (분할/배당 왜곡 방지)
+        # 수정 종가(Adj Close) 반영
         if 'Adj Close' in data.columns:
             data['Close'] = data['Adj Close']
             
@@ -375,15 +376,29 @@ if not st.session_state['logged_in']:
         with st.container(border=True):
             tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
             
-            # 로그인 탭
+            # 로그인 탭 (아이디 저장 포함)
             with tab_login:
                 st.markdown("<br>", unsafe_allow_html=True)
-                login_username = st.text_input("아이디", key="login_user")
+                
+                # 저장된 아이디가 URL 매개변수에 존재하면 불러옴 (Remember ID)
+                saved_user_val = st.query_params.get("user", "")
+                
+                login_username = st.text_input("아이디", value=saved_user_val, key="login_user")
                 login_password = st.text_input("비밀번호", type="password", key="login_pass")
+                
+                # 아이디 저장 체크박스
+                remember_me = st.checkbox("아이디 저장", value=(saved_user_val != ""), key="remember_me_check")
+                
                 st.markdown("<br>", unsafe_allow_html=True)
                 
                 if st.button("로그인", use_container_width=True, type="primary"):
                     if auth.verify_user(login_username, login_password):
+                        # 로그인 성공 시 아이디 저장 처리
+                        if remember_me:
+                            st.query_params["user"] = login_username.strip()
+                        else:
+                            st.query_params.pop("user", None)
+                            
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = login_username
                         st.success("로그인에 성공했습니다! 페이지를 로드 중...")
@@ -391,17 +406,70 @@ if not st.session_state['logged_in']:
                     else:
                         st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
                         
-            # 회원가입 탭 (이메일 인증 프로세스 포함)
+                # ----------------- 🔑 아이디 / 비밀번호 찾기 -----------------
+                st.markdown("<br>", unsafe_allow_html=True)
+                with st.expander("🔍 아이디 / 비밀번호를 잊으셨나요?"):
+                    find_mode = st.radio("찾을 정보 선택", ["아이디 찾기", "비밀번호 재설정"], horizontal=True)
+                    
+                    if find_mode == "아이디 찾기":
+                        find_email = st.text_input("가입 시 등록한 이메일 주소", key="find_email_id")
+                        if st.button("✉️ 아이디 찾기 메일 발송", use_container_width=True):
+                            if not find_email.strip():
+                                st.error("이메일 주소를 입력해 주세요.")
+                            else:
+                                ids = auth.find_id_by_email(find_email)
+                                if ids:
+                                    id_list_str = ", ".join(ids)
+                                    success, msg = auth.send_account_info_email(
+                                        to_email=find_email,
+                                        subject="아이디 찾기 결과 안내",
+                                        content_title="가입하신 이메일로 등록된 아이디 목록은 다음과 같습니다.",
+                                        content_desc="이 비밀번호나 아이디로 로그인을 진행해 주세요.",
+                                        value_to_highlight=id_list_str
+                                    )
+                                    if success:
+                                        st.success(msg)
+                                    else:
+                                        st.info(msg)
+                                else:
+                                    st.error("해당 이메일로 가입된 아이디가 존재하지 않습니다.")
+                                    
+                    elif find_mode == "비밀번호 재설정":
+                        find_user = st.text_input("아이디 입력", key="find_user_pw")
+                        find_email = st.text_input("가입 시 등록한 이메일 주소", key="find_email_pw")
+                        if st.button("✉️ 임시 비밀번호 발송", use_container_width=True):
+                            if not find_user.strip() or not find_email.strip():
+                                st.error("아이디와 이메일 주소를 모두 입력해 주세요.")
+                            else:
+                                temp_char_pool = string.ascii_letters + string.digits
+                                temp_pwd = "".join(random.choices(temp_char_pool, k=8))
+                                
+                                success_db, msg_db = auth.reset_to_temp_password(find_user, find_email, temp_pwd)
+                                if success_db:
+                                    success_mail, msg_mail = auth.send_account_info_email(
+                                        to_email=find_email,
+                                        subject="임시 비밀번호 안내",
+                                        content_title=f"계정 ({find_user})의 임시 비밀번호가 발급되었습니다.",
+                                        content_desc="로그인 후 개인 보안을 위해 비밀번호를 반드시 변경하시는 것을 권장합니다.",
+                                        value_to_highlight=temp_pwd
+                                    )
+                                    if success_mail:
+                                        st.success(msg_mail)
+                                    else:
+                                        st.info(msg_mail)
+                                else:
+                                    st.error(msg_db)
+                        
+            # 회원가입 탭
             with tab_register:
                 st.markdown("<br>", unsafe_allow_html=True)
                 reg_username = st.text_input("새로운 아이디", key="reg_user")
                 reg_password = st.text_input("새로운 비밀번호", type="password", key="reg_pass")
                 reg_password_confirm = st.text_input("비밀번호 확인", type="password", key="reg_pass_conf")
                 
-                # 이메일 입력 필드
                 reg_email = st.text_input("이메일 주소", key="reg_email")
                 
-                # 2-1) 인증 번호 전송 버튼
+                # 인증 번호 전송 버튼
                 col_send, col_status = st.columns([1.5, 2])
                 with col_send:
                     send_btn = st.button("✉️ 인증 코드 전송", use_container_width=True)
@@ -410,20 +478,18 @@ if not st.session_state['logged_in']:
                     if not reg_email.strip():
                         st.error("이메일 주소를 입력해 주세요.")
                     else:
-                        # 6자리 난수 코드 생성
                         code = f"{random.randint(100000, 999999)}"
                         st.session_state['generated_code'] = code
                         st.session_state['code_sent'] = True
                         st.session_state['email_verified'] = False
                         
-                        # 이메일 발송
                         success, msg = auth.send_verification_email(reg_email, code)
                         if success:
                             st.success(msg)
                         else:
-                            st.info(msg)  # SMTP 미설정 시 임시 코드 노출
+                            st.info(msg)
                             
-                # 2-2) 메일 발송 시 인증 코드 입력란 노출
+                # 메일 발송 시 인증 코드 입력란 노출
                 if st.session_state['code_sent'] and not st.session_state['email_verified']:
                     user_code = st.text_input("6자리 인증번호 입력", key="verification_code")
                     
@@ -434,13 +500,12 @@ if not st.session_state['logged_in']:
                         else:
                             st.error("인증번호가 불일치합니다. 다시 입력해 주세요.")
                             
-                # 이메일 인증 완료 상태 표기
                 if st.session_state['email_verified']:
                     st.markdown("<p style='color: #10B981; font-weight: 600; font-size: 0.9rem;'>✓ 이메일 인증 완료</p>", unsafe_allow_html=True)
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 2-3) 최종 가입 제출 버튼
+                # 최종 가입 제출 버튼
                 if st.button("회원가입 완료", use_container_width=True, type="primary"):
                     if not reg_username.strip() or not reg_password.strip() or not reg_email.strip():
                         st.error("모든 항목을 올바르게 입력해 주세요.")
@@ -473,7 +538,7 @@ else:
         
     st.sidebar.markdown("---")
 
-    # 1) 관리자 식별 및 대시보드 모드 전환 (아이디가 admin일 때만 노출)
+    # 관리자 식별 및 대시보드 모드 전환
     is_admin = st.session_state['username'].lower() == "admin"
     if is_admin:
         st.sidebar.subheader("⚙️ 관리자 전용 메뉴")
@@ -492,11 +557,9 @@ else:
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">👥 가입 회원 관리 대시보드</h1>', unsafe_allow_html=True)
         st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">서비스에 등록된 사용자들의 현황을 조회하고 엑셀 파일로 출력합니다.</p>', unsafe_allow_html=True)
         
-        # 유저 목록 가져오기
         users_raw = auth.get_all_users()
         df_users = pd.DataFrame(users_raw, columns=["사용자 ID", "이메일 주소", "가입 일시"])
         
-        # 통계 요약 메트릭
         col_m1, col_m2 = st.columns([1, 3])
         with col_m1:
             st.markdown(
@@ -509,7 +572,6 @@ else:
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # 가입자 표 표출
         st.markdown("### 📋 회원 가입 상세 현황")
         st.dataframe(
             df_users, 
@@ -521,7 +583,6 @@ else:
             }
         )
         
-        # CSV 다운로드 제공 (UTF-8-SIG 인코딩으로 한글 깨짐 완전 방지)
         csv_data = df_users.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 회원 목록 CSV 다운로드 (Excel 호환)",
@@ -530,6 +591,32 @@ else:
             mime="text/csv",
             use_container_width=True
         )
+        
+        # ----------------- ❌ 회원 강제 탈퇴 처리 기능 추가 -----------------
+        st.markdown("<br><hr>", unsafe_allow_html=True)
+        st.markdown("### ❌ 가입 회원 강제 탈퇴 처리")
+        
+        # admin을 제외한 일반 회원 목록 필터링
+        delete_candidates = [user[0] for user in users_raw if user[0].lower() != "admin"]
+        
+        if delete_candidates:
+            user_to_delete = st.selectbox("탈퇴 처리할 회원 ID 선택", delete_candidates)
+            confirm_delete = st.checkbox(
+                f"위 회원({user_to_delete})을 정말 강제 탈퇴 처리하는 것에 동의합니다. (데이터 영구 복구 불가)", 
+                value=False,
+                key="confirm_delete_checkbox"
+            )
+            
+            if st.button("🚨 회원 강제 탈퇴 실행", type="primary", disabled=not confirm_delete, use_container_width=True):
+                success, msg = auth.delete_user(user_to_delete)
+                if success:
+                    st.success(msg)
+                    # 데이터 갱신을 위해 즉시 리런
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
+            st.info("현재 관리자 계정 외에 가입된 일반 회원 계정이 존재하지 않습니다.")
 
     # =======================================================
     #                      기존 백테스터 화면

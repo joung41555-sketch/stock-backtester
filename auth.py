@@ -147,3 +147,114 @@ def get_all_users():
         return []
     finally:
         conn.close()
+
+def find_id_by_email(email):
+    """이메일로 가입된 아이디 찾기"""
+    init_db()
+    email = email.strip()
+    if not email:
+        return None
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT username FROM users WHERE email = ?", (email,))
+        rows = cursor.fetchall()
+        if rows:
+            return [row[0] for row in rows]
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def reset_to_temp_password(username, email, temp_password):
+    """비밀번호 재설정: 아이디와 이메일이 일치하면 임시 비밀번호 해시로 업데이트"""
+    init_db()
+    username = username.strip()
+    email = email.strip()
+    
+    if not username or not email or not temp_password:
+        return False, "정보가 올바르지 않습니다."
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT username FROM users WHERE username = ? AND email = ?", (username, email))
+        if not cursor.fetchone():
+            return False, "입력하신 아이디와 이메일 정보가 일치하는 회원이 없습니다."
+        
+        hashed_pwd = hash_password(temp_password)
+        cursor.execute("UPDATE users SET password_hash = ? WHERE username = ? AND email = ?", (hashed_pwd, username, email))
+        conn.commit()
+        return True, "임시 비밀번호로 재설정이 완료되었습니다."
+    except Exception as e:
+        return False, f"오류가 발생했습니다: {e}"
+    finally:
+        conn.close()
+
+def send_account_info_email(to_email, subject, content_title, content_desc, value_to_highlight):
+    """사용자 계정 정보 안내 메일 발송 (SMTP 미설정 시 가상 테스트 모드로 동작)"""
+    if not SMTP_USER.strip() or not SMTP_PASSWORD.strip():
+        return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 안내 정보: {value_to_highlight}"
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = f"Dynamic Stock Backtester <{SMTP_USER}>"
+        msg['To'] = to_email
+        msg['Subject'] = f"[Dynamic Stock Backtester] {subject}"
+        
+        html_body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: #F8FAFC; padding: 20px;">
+            <div style="max-width: 500px; margin: 0 auto; background-color: #1E293B; border-radius: 12px; padding: 30px; border: 1px solid #334155;">
+                <h2 style="color: #FF4B4B; text-align: center;">📈 Dynamic Stock Backtester</h2>
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
+                <p>안녕하세요. 요청하신 계정 찾기 서비스 안내 메일입니다.</p>
+                <p>{content_title}</p>
+                <div style="background-color: #0F172A; border: 1px solid #FF4B4B; color: #FF4B4B; font-size: 20px; font-weight: 700; padding: 15px; border-radius: 8px; text-align: center; margin: 25px 0;">
+                    {value_to_highlight}
+                </div>
+                <p>{content_desc}</p>
+                <p style="font-size: 12px; color: #94A3B8; text-align: center; margin-top: 30px;">본 메일은 시스템 발신 전용 메일입니다.</p>
+            </div>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html_body, 'html'))
+        
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, to_email, msg.as_string())
+        server.quit()
+        return True, f"{to_email} 주소로 이메일 안내가 발송되었습니다!"
+    except Exception as e:
+        return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
+
+def delete_user(username):
+    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴)"""
+    init_db()
+    username = username.strip()
+    if not username:
+        return False, "아이디가 올바르지 않습니다."
+    
+    # admin 계정은 본인이므로 삭제 방지 보안 처리
+    if username.lower() == "admin":
+        return False, "관리자(admin) 계정은 삭제할 수 없습니다."
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # 유저 존재 여부 확인
+        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        if not cursor.fetchone():
+            return False, "존재하지 않는 회원입니다."
+            
+        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.commit()
+        return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
+    except Exception as e:
+        return False, f"오류가 발생했습니다: {e}"
+    finally:
+        conn.close()
