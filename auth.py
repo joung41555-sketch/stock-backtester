@@ -5,6 +5,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
+from datetime import datetime, timedelta
+import secrets
+import re
 
 # SQLite DB 경로 설정 (어떤 환경에서도 항상 동일한 절대 경로 유지)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,11 +87,22 @@ def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # 회원 테이블 생성
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 세션 자동 로그인 테이블 생성
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL
         )
     """)
     
@@ -278,14 +292,14 @@ def delete_user(username):
             return False, "존재하지 않는 회원입니다."
             
         cursor.execute("DELETE FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
+        # 해당 유저의 로그인 세션도 파괴
+        cursor.execute("DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,))
         conn.commit()
         return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
     except Exception as e:
         return False, f"오류가 발생했습니다: {e}"
     finally:
         conn.close()
-
-import re
 
 def is_valid_username(username):
     """아이디 유효성 검사: 3~15자의 영문, 숫자, 언더바(_)만 허용"""
@@ -312,3 +326,65 @@ def is_strong_password(password):
         return False, "비밀번호에 특수문자(!@#$%^&*()_+-=)가 최소 1개 이상 포함되어야 합니다."
         
     return True, "안전한 비밀번호입니다."
+
+def create_session(username):
+    """새로운 세션 생성 및 DB 저장 (유효 기간: 2일)"""
+    init_db()
+    username = username.strip()
+    token = secrets.token_hex(16)  # 32자리 헥사 스트링 생성
+    expires_at = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)", (token, username, expires_at))
+        conn.commit()
+        return token
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def verify_session_token(token):
+    """세션 토큰 유효성 검사: 만료되지 않았으면 해당 username 반환"""
+    init_db()
+    token = token.strip()
+    if not token:
+        return None
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT username, expires_at FROM sessions WHERE token = ?", (token,))
+        row = cursor.fetchone()
+        if row:
+            username, expires_at_str = row
+            expires_at = datetime.strptime(expires_at_str, '%Y-%m-%d %H:%M:%S')
+            if datetime.now() < expires_at:
+                return username
+            else:
+                # 만료된 세션 파기
+                cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                conn.commit()
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def destroy_session(token):
+    """세션 무효화 (DB에서 삭제)"""
+    init_db()
+    token = token.strip()
+    if not token:
+        return
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()

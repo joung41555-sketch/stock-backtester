@@ -37,6 +37,15 @@ if 'login_attempts' not in st.session_state:
 if 'lock_until' not in st.session_state:
     st.session_state['lock_until'] = None
 
+# 새로고침 발생 시 URL 파라미터(session_key)를 확인하여 자동 로그인 복원
+if not st.session_state['logged_in']:
+    session_key = st.query_params.get("session_key", "")
+    if session_key:
+        verified_username = auth.verify_session_token(session_key)
+        if verified_username:
+            st.session_state['logged_in'] = True
+            st.session_state['username'] = verified_username
+
 # 커스텀 CSS로 디자인 개선 (유려한 글꼴, 그라데이션 및 카드 스타일, 헤더 감추기)
 st.markdown("""
     <style>
@@ -429,6 +438,11 @@ if not st.session_state['logged_in']:
                 
                 if st.button("로그인", use_container_width=True, type="primary", disabled=is_locked):
                     if auth.verify_user(login_username, login_password):
+                        # 로그인 성공 시 1. DB 세션 생성 및 토큰 발급 (F5 새로고침 유지)
+                        token = auth.create_session(login_username)
+                        if token:
+                            st.query_params["session_key"] = token
+                            
                         # 로그인 성공 시 세션 카운터 리셋 및 아이디 저장 처리
                         st.session_state['login_attempts'] = 0
                         st.session_state['lock_until'] = None
@@ -591,6 +605,12 @@ else:
     
     st.sidebar.markdown(f"👤 **{st.session_state['username']}**님 환영합니다!")
     if st.sidebar.button("🔓 로그아웃", use_container_width=True):
+        # DB 세션 파괴 및 파라미터 삭제 (F5 새로고침 방지 초기화)
+        current_token = st.query_params.get("session_key", "")
+        if current_token:
+            auth.destroy_session(current_token)
+            st.query_params.pop("session_key", None)
+            
         st.session_state['logged_in'] = False
         st.session_state['username'] = ""
         st.rerun()
