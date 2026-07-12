@@ -4,6 +4,7 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import streamlit as st
 
 # SQLite DB 경로 설정 (어떤 환경에서도 항상 동일한 절대 경로 유지)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,18 +13,26 @@ DB_PATH = os.path.join(BASE_DIR, "users.db")
 PASSWORD_SALT = "antigravity-secure-salt-2026!#"
 
 # 실제 이메일 발송을 원하시면 아래 설정을 채워주거나 Streamlit Secrets에 등록해 주세요.
-import streamlit as st
-
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-
 try:
-    # Streamlit Secrets(환경 변수)에서 계정 보안 로딩
-    SMTP_USER = st.secrets.get("SMTP_USER", "")
-    SMTP_PASSWORD = st.secrets.get("SMTP_PASSWORD", "")
+    # 대소문자 구분 없이 모두 지원하도록 유연하게 감지
+    SMTP_USER = st.secrets.get("SMTP_USER") or st.secrets.get("smtp_user") or ""
+    SMTP_PASSWORD = st.secrets.get("SMTP_PASSWORD") or st.secrets.get("smtp_password") or ""
 except Exception:
     SMTP_USER = ""
     SMTP_PASSWORD = ""
+
+def get_smtp_config(email):
+    """이메일 주소 도메인을 분석해 알맞은 SMTP 서버 정보와 포트, SSL 여부를 반환"""
+    email_lower = email.strip().lower()
+    if "@naver.com" in email_lower:
+        return "smtp.naver.com", 465, True  # 네이버는 SSL 465가 정석
+    elif "@gmail.com" in email_lower:
+        return "smtp.gmail.com", 587, False  # 지메일은 TLS 587
+    elif "@daum.net" in email_lower or "@hanmail.net" in email_lower:
+        return "smtp.daum.net", 465, True  # 다음/한메일은 SSL 465
+    else:
+        # 기타 기본값은 Gmail 규격으로 적용
+        return "smtp.gmail.com", 587, False
 
 def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션"""
@@ -58,6 +67,9 @@ def send_verification_email(to_email, code):
         return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 임시 인증번호는 {code} 입니다."
     
     try:
+        # 발송인 이메일에 맞춰 SMTP 서버 설정 자동 라우팅
+        smtp_server, smtp_port, use_ssl = get_smtp_config(SMTP_USER)
+        
         msg = MIMEMultipart()
         msg['From'] = f"Dynamic Stock Backtester <{SMTP_USER}>"
         msg['To'] = to_email
@@ -81,14 +93,20 @@ def send_verification_email(to_email, code):
         """
         msg.attach(MIMEText(html_body, 'html'))
         
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
+        # SSL 및 TLS 전송 방식 다변화 연동
+        if use_ssl:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            
         server.sendmail(SMTP_USER, to_email, msg.as_string())
         server.quit()
         return True, f"{to_email} 주소로 인증번호가 발송되었습니다!"
     except Exception as e:
-        return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인하시거나 계정을 비워두고 데모 모드로 사용해 주세요)"
+        return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
 
 def register_user(username, password, email):
     """신규 회원가입 처리 (이메일 추가)"""
@@ -207,6 +225,8 @@ def send_account_info_email(to_email, subject, content_title, content_desc, valu
         return False, f"[데모 모드] 이메일 계정이 설정되지 않았습니다. 안내 정보: {value_to_highlight}"
         
     try:
+        smtp_server, smtp_port, use_ssl = get_smtp_config(SMTP_USER)
+        
         msg = MIMEMultipart()
         msg['From'] = f"Dynamic Stock Backtester <{SMTP_USER}>"
         msg['To'] = to_email
@@ -231,9 +251,15 @@ def send_account_info_email(to_email, subject, content_title, content_desc, valu
         """
         msg.attach(MIMEText(html_body, 'html'))
         
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
+        # SSL 및 TLS 전송 방식 다변화 연동
+        if use_ssl:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            
         server.sendmail(SMTP_USER, to_email, msg.as_string())
         server.quit()
         return True, f"{to_email} 주소로 이메일 안내가 발송되었습니다!"
