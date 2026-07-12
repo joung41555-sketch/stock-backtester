@@ -785,49 +785,74 @@ else:
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">💼 Portfolio Visualizer 분석 엔진</h1>', unsafe_allow_html=True)
         st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">자동 주기 리밸런싱, 매월 추가 적립 및 소르티노 지수와 상관관계 분석 보고서</p>', unsafe_allow_html=True)
         
-        st.sidebar.subheader("1. 포트폴리오 구성 종목")
-        tickers_input = st.sidebar.text_input("종목 티커 입력 (쉼표 구분)", value=st.session_state['portfolio_tickers'])
-        st.session_state['portfolio_tickers'] = tickers_input
-        parsed_tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
-        
-        today = datetime.today()
-        default_start = today - timedelta(days=365 * 3)
-        start_date = st.sidebar.date_input("분석 시작일", default_start)
-        end_date = st.sidebar.date_input("분석 종료일", today)
-        
-        st.sidebar.subheader("2. 초기 자본 및 자금 흐름")
-        initial_capital = st.sidebar.number_input("초기 투자 금액", min_value=1000, value=10000, step=1000)
-        contribution_amount = st.sidebar.number_input("매월 추가 납입액 (적립금)", min_value=0, value=0, step=100)
-        
-        rebalance_period = st.sidebar.selectbox(
-            "자산 비중 리밸런싱 주기 (Rebalancing)",
-            ["None", "Monthly", "Quarterly", "Annually"]
-        )
-        
-        st.sidebar.subheader("3. 자산별 투자 비중 설정")
-        weights = []
-        for ticker in parsed_tickers:
-            w_val = st.sidebar.number_input(
-                f"{ticker} 비중 (%)", 
-                min_value=0.0, 
-                max_value=100.0, 
-                value=float(100.0 / len(parsed_tickers)) if len(parsed_tickers) > 0 else 0.0, 
-                step=0.01, 
-                format="%.2f"
-            )
-            weights.append(w_val)
+        # 🛠️ 본문 설정 입력 카드 (오른쪽 메인 대시보드 내)
+        with st.expander("🛠️ 포트폴리오 구성 & 자산 비중 설정 입력 패널", expanded=True):
+            col_t1, col_t2 = st.columns([3, 2])
+            with col_t1:
+                tickers_input = st.text_input("종목 티커 입력 (쉼표 구분)", value=st.session_state.get('portfolio_tickers', "AAPL, MSFT, GOOG"))
+                st.session_state['portfolio_tickers'] = tickers_input
+                parsed_tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+            with col_t2:
+                today = datetime.today()
+                default_start = today - timedelta(days=365 * 3)
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    start_date = st.date_input("분석 시작일", default_start)
+                with col_d2:
+                    end_date = st.date_input("분석 종료일", today)
+                    
+            st.markdown("<div style='border-top: 1px solid #334155; margin: 0.8rem 0;'></div>", unsafe_allow_html=True)
             
-        sum_weights = sum(weights)
-        st.sidebar.markdown(f"**현재 비중 총합:** `{sum_weights:.2f}%` (반드시 **100%** 여야 함)")
-        
-        w_validation = (abs(sum_weights - 100.0) < 0.01)
-        if not w_validation:
-            st.sidebar.warning("⚠️ 모든 자산 비중의 총합이 정확하게 100.00%가 되도록 조정해 주세요.")
+            col_cap1, col_cap2, col_cap3 = st.columns(3)
+            with col_cap1:
+                initial_capital = st.number_input("초기 투자 금액", min_value=1000, value=10000, step=1000)
+            with col_cap2:
+                contribution_amount = st.number_input("매월 추가 납입액 (적립금)", min_value=0, value=0, step=100)
+            with col_cap3:
+                rebalance_period = st.selectbox(
+                    "자산 비중 리밸런싱 주기",
+                    ["None", "Monthly", "Quarterly", "Annually"]
+                )
+                
+            st.markdown("<div style='border-top: 1px solid #334155; margin: 0.8rem 0;'></div>", unsafe_allow_html=True)
+            st.markdown("##### ⚖️ 자산별 투자 비중 설정 (%)")
             
-        run_port = st.sidebar.button("📊 포트폴리오 분석 실행", use_container_width=True, disabled=not w_validation)
-        
-        if run_port or 'port_run' not in st.session_state:
-            st.session_state['port_run'] = True
+            weights = []
+            if parsed_tickers:
+                num_cols = min(6, len(parsed_tickers))
+                ticker_cols = st.columns(num_cols)
+                for idx, ticker in enumerate(parsed_tickers):
+                    col_target = ticker_cols[idx % num_cols]
+                    with col_target:
+                        w_val = st.number_input(
+                            f"{ticker}", 
+                            min_value=0.0, 
+                            max_value=100.0, 
+                            value=float(100.0 / len(parsed_tickers)) if len(parsed_tickers) > 0 else 0.0, 
+                            step=0.01, 
+                            format="%.2f",
+                            key=f"weight_{ticker}"
+                        )
+                        weights.append(w_val)
+            else:
+                st.info("위에 분석할 티커 목록을 입력해 주세요.")
+                
+            sum_weights = sum(weights)
+            w_validation = (abs(sum_weights - 100.0) < 0.01)
+            
+            col_sub1, col_sub2 = st.columns([3.2, 1])
+            with col_sub1:
+                if w_validation:
+                    st.success(f"✓ 비중 총합: **{sum_weights:.2f}%** (분석 가능한 정상 수치입니다.)")
+                else:
+                    st.warning(f"⚠️ 현재 비중 총합: **{sum_weights:.2f}%** (100.00%를 정확히 맞춰야 활성화됩니다.)")
+            with col_sub2:
+                run_port = st.button("📊 포트폴리오 분석 실행", use_container_width=True, disabled=not w_validation)
+                
+        if run_port:
+            st.session_state['port_run_triggered'] = True
+            
+        if st.session_state.get('port_run_triggered', False):
             
             with st.spinner("다중 자산 주가 데이터를 분석하고 Portfolio Visualizer 엔진 시뮬레이션 수행 중..."):
                 df_port = portfolio_engine.get_portfolio_data(parsed_tickers, start_date, end_date)
@@ -1717,6 +1742,68 @@ else:
                         </div>
                     """, unsafe_allow_html=True)
                     
+                # 장단기 금리차 연동
+                yield_10y = risk_data.get("^TNX", {}).get("price", 4.2)
+                yield_3m = risk_data.get("^IRX", {}).get("price", 5.2)
+                yield_spread = yield_10y - yield_3m
+                
+                if yield_spread < 0:
+                    yield_state = "🚨 장단기 금리 역전 발생 (침체 신호)"
+                    yield_color = "#FF4B4B"
+                else:
+                    yield_state = "🟢 정상 금리차 유지 (안정)"
+                    yield_color = "#10B981"
+                    
+                with c_r2_2:
+                    st.markdown(f"""
+                        <div class="metric-card" style="border-left: 5px solid {yield_color};">
+                            <div class="metric-label">장단기 금리차 (10Y 국채 - 3M 국채)</div>
+                            <div class="metric-value">{yield_spread:+.3f}%</div>
+                            <div style="font-weight: 600; color: {yield_color}; margin-top: 0.2rem;">{yield_state}</div>
+                            <div style="color: #94A3B8; font-size: 0.85rem; margin-top: 0.4rem;">
+                                10Y: {yield_10y:.2f}% / 3M: {yield_3m:.2f}% (마이너스 시 1~2년 내 경기 침체 예고)
+                            </div>
+                            <div style="border-top: 1px solid #334155; margin-top: 0.6rem; padding-top: 0.4rem; font-size: 0.78rem; color: #94A3B8; line-height: 1.35;">
+                                <b>📈 상승 시</b>: 정상적 경기 확장세, 기업 환경 양호<br>
+                                <b>📉 하락(역전) 시</b>: 자금 경색 심화 및 향후 경기 침체(R의 공포) 임박 강력 예고
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<br>### 3. 💳 신용 및 기업 부도 위험 지표", unsafe_allow_html=True)
+                c_r3_1, c_r3_2 = st.columns(2)
+                
+                # 하이일드 스프레드
+                hyg_price = risk_data.get("HYG", {}).get("price", 75.0)
+                ief_price = risk_data.get("IEF", {}).get("price", 95.0)
+                hy_ratio = (ief_price / hyg_price)
+                
+                if hy_ratio > 1.30:
+                    hy_state = "🚨 신용 스프레드 확대 (신용 위기)"
+                    hy_color = "#FF4B4B"
+                elif hy_ratio > 1.22:
+                    hy_state = "⚠️ 신용 위험 주의선 진입"
+                    hy_color = "#F1C40F"
+                else:
+                    hy_state = "🟢 신용 여건 안정"
+                    hy_color = "#10B981"
+                    
+                with c_r3_1:
+                    st.markdown(f"""
+                        <div class="metric-card" style="border-left: 5px solid {hy_color};">
+                            <div class="metric-label">하이일드 스프레드 지표 (IEF / HYG)</div>
+                            <div class="metric-value">{hy_ratio:.3f}</div>
+                            <div style="font-weight: 600; color: {hy_color}; margin-top: 0.2rem;">{hy_state}</div>
+                            <div style="color: #94A3B8; font-size: 0.85rem; margin-top: 0.4rem;">
+                                안전 국채(IEF) 대비 정크본드(HYG) 비율 (증가 시 부도 리스크 급등)
+                            </div>
+                            <div style="border-top: 1px solid #334155; margin-top: 0.6rem; padding-top: 0.4rem; font-size: 0.78rem; color: #94A3B8; line-height: 1.35;">
+                                <b>📈 상승 시</b>: 부실 회사채 가치 폭락, 기업 부도 위기 급증 및 주식 악재<br>
+                                <b>📉 하락 시</b>: 신용 위험 해소 및 리스크 온 자금 선호
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
                 ted_spread = 0.12 + (vix_val / 95.0)
                 if ted_spread > 0.45:
                     ted_state = "🚨 은행 간 유동성 긴장 경보"
@@ -1839,39 +1926,55 @@ else:
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Dynamic Stock Backtester</h1>', unsafe_allow_html=True)
         st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">수정 종가(Adjusted Close)와 정밀한 슬리피지/세금을 반영한 실전용 백테스터</p>', unsafe_allow_html=True)
 
-        st.sidebar.subheader("1. 대상 종목 & 기간")
-        st.sidebar.write("🔍 실시간 티커 사전 위젯을 통해 검색한 정확한 티커명을 아래에 입력하세요.")
-        ticker_input = st.sidebar.text_input("주식 티커 입력 (yfinance 규격)", value="AAPL")
-        st.sidebar.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ'")
-
-        today = datetime.today()
-        default_start = today - timedelta(days=365 * 3)
-        start_date = st.sidebar.date_input("시작일", default_start)
-        end_date = st.sidebar.date_input("종료일", today)
-
-        st.sidebar.subheader("2. 실전 투자 조건")
-        initial_capital = st.sidebar.number_input("초기 투자금 ($ 또는 ₩)", min_value=1000, value=10000, step=1000)
-        commission_pct = st.sidebar.slider("증권사 수수료 (%)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
-        slippage_pct = st.sidebar.slider("슬리피지 (Slippage, %)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
-        tax_pct = st.sidebar.slider("거래세 (Tax, %)", min_value=0.0, max_value=1.0, value=0.18, step=0.02) / 100.0
-
-        st.sidebar.subheader("3. 비교 벤치마크 지수")
-        benchmark_option = st.sidebar.selectbox(
-            "비교 대상 시장 지수", 
-            ["선택 안 함", "S&P 500 (^GSPC)", "Nasdaq 100 (QQQ)", "KOSPI (^KS11)", "KOSDAQ (^KQ11)"]
-        )
-
-        st.sidebar.subheader("4. 이동평균선(SMA) 설정")
-        short_window = st.sidebar.number_input("단기 이평선 기간 (일)", min_value=2, max_value=100, value=20)
-        long_window = st.sidebar.number_input("장기 이평선 기간 (일)", min_value=5, max_value=300, value=50)
-
-        if short_window >= long_window:
-            st.sidebar.error("단기 이평선 기간은 장기 이평선 기간보다 작아야 합니다!")
-
-        run_button = st.sidebar.button("⚡ 백테스트 실행", use_container_width=True)
-
-        if run_button or 'backtest_run' not in st.session_state:
-            st.session_state['backtest_run'] = True
+        # 🛠️ 본문 설정 입력 카드
+        with st.expander("🛠️ 백테스트 설정 컨트롤러 입력 패널", expanded=True):
+            col_b1, col_b2 = st.columns([3, 2])
+            with col_b1:
+                ticker_input = st.text_input("주식 티커 입력 (yfinance 규격)", value="AAPL")
+                st.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ'")
+            with col_b2:
+                today = datetime.today()
+                default_start = today - timedelta(days=365 * 3)
+                col_bd1, col_bd2 = st.columns(2)
+                with col_bd1:
+                    start_date = st.date_input("시작일", default_start)
+                with col_bd2:
+                    end_date = st.date_input("종료일", today)
+                    
+            st.markdown("<div style='border-top: 1px solid #334155; margin: 0.8rem 0;'></div>", unsafe_allow_html=True)
+            
+            col_cond1, col_cond2, col_cond3, col_cond4 = st.columns(4)
+            with col_cond1:
+                initial_capital = st.number_input("초기 투자금 ($ 또는 ₩)", min_value=1000, value=10000, step=1000)
+            with col_cond2:
+                commission_pct = st.slider("증권사 수수료 (%)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
+            with col_cond3:
+                slippage_pct = st.slider("슬리피지 (Slippage, %)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
+            with col_cond4:
+                tax_pct = st.slider("거래세 (Tax, %)", min_value=0.0, max_value=1.0, value=0.18, step=0.02) / 100.0
+                
+            st.markdown("<div style='border-top: 1px solid #334155; margin: 0.8rem 0;'></div>", unsafe_allow_html=True)
+            
+            col_sma1, col_sma2, col_sma3 = st.columns(3)
+            with col_sma1:
+                short_window = st.number_input("단기 이평선 기간 (일)", min_value=2, max_value=100, value=20)
+            with col_sma2:
+                long_window = st.number_input("장기 이평선 기간 (일)", min_value=5, max_value=300, value=50)
+            with col_sma3:
+                benchmark_option = st.selectbox(
+                    "비교 대상 시장 지수", 
+                    ["선택 안 함", "S&P 500 (^GSPC)", "Nasdaq 100 (QQQ)", "KOSPI (^KS11)", "KOSDAQ (^KQ11)"]
+                )
+                
+            if short_window >= long_window:
+                st.error("⚠️ 단기 이평선 기간은 장기 이평선 기간보다 작아야 합니다!")
+                
+            run_button = st.button("⚡ 백테스트 실행", use_container_width=True, disabled=(short_window >= long_window))
+            
+        if run_button:
+            st.session_state['backtest_run_triggered'] = True
+            
+        if st.session_state.get('backtest_run_triggered', False):
             
             if short_window >= long_window:
                 st.error("설정을 확인해 주세요: 단기 이평선은 장기 이평선보다 작아야 합니다.")
