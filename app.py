@@ -399,33 +399,53 @@ def render_live_dashboard():
             
     st.session_state['dash_index'] = (st.session_state['dash_index'] + 1) % len(dashboard_stocks_groups)
 
+# ----------------- 🛠️ 실시간 데이터 에디터 유실 종결 콜백 -----------------
+def sync_editor_data():
+    """st.data_editor의 임시 변경 상태를 세션 상태에 즉시 동기화 보존"""
+    if 'portfolio_editor' in st.session_state:
+        edits = st.session_state.portfolio_editor
+        df = st.session_state['my_portfolio_data'].copy()
+        
+        # 1. 수정한 셀(edited_rows) 반영
+        for idx, changes in edits.get('edited_rows', {}).items():
+            for col, val in changes.items():
+                df.at[idx, col] = val
+                
+        # 2. 추가된 행(added_rows) 반영
+        added_rows = edits.get('added_rows', [])
+        if added_rows:
+            df_added = pd.DataFrame(added_rows)
+            df = pd.concat([df, df_added], ignore_index=True)
+            
+        # 3. 삭제된 행(deleted_rows) 반영
+        deleted_indices = edits.get('deleted_rows', [])
+        if deleted_indices:
+            df = df.drop(index=deleted_indices).reset_index(drop=True)
+            
+        st.session_state['my_portfolio_data'] = df
+
 
 # =======================================================
 #                      로그인 / 회원가입 제어
 # =======================================================
 if not st.session_state['logged_in']:
-    # 타이틀 영역
     st.markdown('<div class="main-title">📊 Dynamic Stock Backtester</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</div>', unsafe_allow_html=True)
 
-    # 1) 로그인 페이지 상단 실시간 주가 대시보드
     st.markdown("<h4 style='text-align: center; color: #94A3B8; margin-bottom: 1.5rem;'>📈 주요 시장지표 & 대표주 실시간 현황</h4>", unsafe_allow_html=True)
     render_live_dashboard()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 2) 로그인 / 회원가입 입력 영역
     _, center_col, _ = st.columns([1, 1.8, 1])
     
     with center_col:
         with st.container(border=True):
             tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
             
-            # 로그인 탭 (무차별 대입 공격 차단 및 아이디 저장 포함)
             with tab_login:
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 2-1) 무차별 대입 잠금 상태 연동 계산
                 is_locked = False
                 remaining_seconds = 0
                 if st.session_state['lock_until'] is not None:
@@ -436,16 +456,13 @@ if not st.session_state['logged_in']:
                         st.session_state['lock_until'] = None
                         st.session_state['login_attempts'] = 0
                 
-                # 저장된 아이디가 URL 매개변수에 존재하면 불러옴 (Remember ID)
                 saved_user_val = st.query_params.get("user", "")
                 
                 login_username = st.text_input("아이디", value=saved_user_val, key="login_user")
                 login_password = st.text_input("비밀번호", type="password", key="login_pass")
                 
-                # 아이디 저장 체크박스
                 remember_me = st.checkbox("아이디 저장", value=(saved_user_val != ""), key="remember_me_check")
                 
-                # 잠금 상태일 때 경고 노출
                 if is_locked:
                     st.error(f"⚠️ 연속 로그인 실패로 로그인이 차단되었습니다. {remaining_seconds}초 후 다시 시도하세요.")
                 
@@ -453,12 +470,10 @@ if not st.session_state['logged_in']:
                 
                 if st.button("로그인", use_container_width=True, type="primary", disabled=is_locked):
                     if auth.verify_user(login_username, login_password):
-                        # 로그인 성공 시 1. DB 세션 생성 및 토큰 발급 (F5 새로고침 유지)
                         token = auth.create_session(login_username)
                         if token:
                             st.query_params["session_key"] = token
                             
-                        # 로그인 성공 시 세션 카운터 리셋 및 아이디 저장 처리
                         st.session_state['login_attempts'] = 0
                         st.session_state['lock_until'] = None
                         
@@ -480,7 +495,6 @@ if not st.session_state['logged_in']:
                         else:
                             st.error(f"아이디 또는 비밀번호가 올바르지 않습니다. (로그인 실패 횟수: {st.session_state['login_attempts']}/5)")
                         
-                # ----------------- 🔑 아이디 / 비밀번호 찾기 -----------------
                 st.markdown("<br>", unsafe_allow_html=True)
                 with st.expander("🔍 아이디 / 비밀번호를 잊으셨나요?"):
                     find_mode = st.radio("찾을 정보 선택", ["아이디 찾기", "비밀번호 재설정"], horizontal=True)
@@ -534,7 +548,6 @@ if not st.session_state['logged_in']:
                                 else:
                                     st.error(msg_db)
                         
-            # 회원가입 탭 (강한 유효성 필터 및 이메일 인증)
             with tab_register:
                 st.markdown("<br>", unsafe_allow_html=True)
                 reg_username = st.text_input("새로운 아이디", key="reg_user")
@@ -547,7 +560,6 @@ if not st.session_state['logged_in']:
                 
                 reg_email = st.text_input("이메일 주소", key="reg_email")
                 
-                # 인증 번호 전송 버튼
                 col_send, col_status = st.columns([1.5, 2])
                 with col_send:
                     send_btn = st.button("✉️ 인증 코드 전송", use_container_width=True)
@@ -567,7 +579,6 @@ if not st.session_state['logged_in']:
                         else:
                             st.info(msg)
                             
-                # 메일 발송 시 인증 코드 입력란 노출
                 if st.session_state['code_sent'] and not st.session_state['email_verified']:
                     user_code = st.text_input("6자리 인증번호 입력", key="verification_code")
                     
@@ -583,24 +594,17 @@ if not st.session_state['logged_in']:
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 최종 가입 제출 버튼 (강력한 유효성 필터 적용)
                 if st.button("회원가입 완료", use_container_width=True, type="primary"):
-                    # 1) 공란 검사
                     if not reg_username.strip() or not reg_password.strip() or not reg_email.strip():
                         st.error("모든 항목을 올바르게 입력해 주세요.")
-                    # 2) 아이디 패턴 검사
                     elif not auth.is_valid_username(reg_username):
-                        st.error("아이디는 3~15자의 영문자, 숫자, 언더스코어(_)만 허용됩니다. 특수문자나 한글, 띄어쓰기는 포함할 수 없습니다.")
-                    # 3) 비밀번호 강도 검사
+                        st.error("아이디는 3~15자의 영문자, 숫자, 언더스코어(_)만 허용됩니다.")
                     elif not auth.is_strong_password(reg_password)[0]:
                         st.error(auth.is_strong_password(reg_password)[1])
-                    # 4) 비밀번호 일치 확인
                     elif reg_password != reg_password_confirm:
                         st.error("비밀번호와 비밀번호 확인이 서로 일치하지 않습니다.")
-                    # 5) 이메일 인증 완료 확인
                     elif not st.session_state['email_verified']:
                         st.error("이메일 인증을 먼저 완료해 주세요.")
-                    # 6) 가입 처리
                     else:
                         success, msg = auth.register_user(reg_username, reg_password, reg_email)
                         if success:
@@ -615,12 +619,10 @@ if not st.session_state['logged_in']:
 #                      메인 애플리케이션 화면
 # =======================================================
 else:
-    # 사이드바 설정 영역
     st.sidebar.header("⚙️ 설정 및 메뉴")
-    
     st.sidebar.markdown(f"👤 **{st.session_state['username']}**님 환영합니다!")
+    
     if st.sidebar.button("🔓 로그아웃", use_container_width=True):
-        # DB 세션 파괴 및 파라미터 삭제 (F5 새로고침 방지 초기화)
         current_token = st.query_params.get("session_key", "")
         if current_token:
             auth.destroy_session(current_token)
@@ -632,7 +634,6 @@ else:
         
     st.sidebar.markdown("---")
 
-    # 관리자 식별 및 대시보드 모드 전환
     is_admin = st.session_state['username'].lower() == "admin"
     if is_admin:
         st.sidebar.subheader("⚙️ 관리자 전용 메뉴")
@@ -652,7 +653,6 @@ else:
     # =======================================================
     #                🔑 실시간 티커 사전 위젯 (공용)
     # =======================================================
-    # 모든 분석 화면 사이드바에 실시간 추천 단어 자동 완성 창을 배치해 검색을 도움
     if admin_mode in ["📈 백테스터 실행", "💼 포트폴리오 분석", "📊 현재 포트폴리오 진단"]:
         with st.sidebar.expander("🔍 실시간 티커 검색기 (자동완성)", expanded=False):
             search_query = st.text_input("주식명 또는 철자 입력", value="", placeholder="예: AAPL, 삼성, NV")
@@ -664,7 +664,6 @@ else:
                 st.code(pure_symbol, language="text")
                 st.caption("위의 박스 안 티커명을 더블클릭하거나 복사(Ctrl+C)하여 입력창에 붙여 넣으세요.")
                 
-                # 포트폴리오 탭용 복사 보조 버튼 연동
                 if admin_mode == "💼 포트폴리오 분석":
                     if st.button("➕ 포트폴리오에 즉시 추가"):
                         current_list = [t.strip().upper() for t in st.session_state['portfolio_tickers'].split(",") if t.strip()]
@@ -684,7 +683,6 @@ else:
         users_raw = auth.get_all_users()
         df_users = pd.DataFrame(users_raw, columns=["사용자 ID", "이메일 주소", "가입 일시"])
         
-        # admin 계정이 회원 가입 상세현황 표의 제일 위에 배치되도록 강제 정렬
         df_admin = df_users[df_users["사용자 ID"].str.lower() == "admin"]
         df_others = df_users[df_users["사용자 ID"].str.lower() != "admin"]
         df_users = pd.concat([df_admin, df_others]).reset_index(drop=True)
@@ -700,17 +698,8 @@ else:
             )
             
         st.markdown("<br>", unsafe_allow_html=True)
-        
         st.markdown("### 📋 회원 가입 상세 현황")
-        st.dataframe(
-            df_users, 
-            use_container_width=True,
-            column_config={
-                "사용자 ID": st.column_config.TextColumn(width="medium"),
-                "이메일 주소": st.column_config.TextColumn(width="large"),
-                "가입 일시": st.column_config.DatetimeColumn(width="medium", format="YYYY-MM-DD HH:mm:ss")
-            }
-        )
+        st.dataframe(df_users, use_container_width=True)
         
         csv_data = df_users.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
@@ -721,13 +710,10 @@ else:
             use_container_width=True
         )
         
-        # ----------------- ❌ 회원 강제 탈퇴 처리 기능 추가 -----------------
         st.markdown("<br><hr>", unsafe_allow_html=True)
         st.markdown("### ❌ 가입 회원 강제 탈퇴 처리")
         
-        # admin을 제외한 일반 회원 목록 필터링
         delete_candidates = [user[0] for user in users_raw if user[0].lower() != "admin"]
-        
         if delete_candidates:
             user_to_delete = st.selectbox("탈퇴 처리할 회원 ID 선택", delete_candidates)
             confirm_delete = st.checkbox(
@@ -751,12 +737,9 @@ else:
     # =======================================================
     elif admin_mode == "💼 포트폴리오 분석":
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">💼 Portfolio Visualizer 분석 엔진</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">자동 주기 리밸런싱, 매월 추가 적립 및 소르티노 지수와 연도별 상세 수익률 차트 분석</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">자동 주기 리밸런싱, 매월 추가 적립 및 소르티노 지수와 상관관계 분석 보고서</p>', unsafe_allow_html=True)
         
-        # 사이드바 입력 설정
         st.sidebar.subheader("1. 포트폴리오 구성 종목")
-        
-        # 세션 연계로 사이드바 검색기에서 단추 클릭 시 자동 증식
         tickers_input = st.sidebar.text_input("종목 티커 입력 (쉼표 구분)", value=st.session_state['portfolio_tickers'])
         st.session_state['portfolio_tickers'] = tickers_input
         parsed_tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
@@ -775,11 +758,8 @@ else:
             ["None", "Monthly", "Quarterly", "Annually"]
         )
         
-        # 3) 종목별 자산 배분 비중 동적 입력기 구성
         st.sidebar.subheader("3. 자산별 투자 비중 설정")
         weights = []
-        
-        # 동적 소수점 입력 창 생성 (number_input)
         for ticker in parsed_tickers:
             w_val = st.sidebar.number_input(
                 f"{ticker} 비중 (%)", 
@@ -794,14 +774,12 @@ else:
         sum_weights = sum(weights)
         st.sidebar.markdown(f"**현재 비중 총합:** `{sum_weights:.2f}%` (반드시 **100%** 여야 함)")
         
-        # 부동소수점 오차 보정 고려 (100%와의 차이가 0.01% 미만이면 통과)
         w_validation = (abs(sum_weights - 100.0) < 0.01)
         if not w_validation:
             st.sidebar.warning("⚠️ 모든 자산 비중의 총합이 정확하게 100.00%가 되도록 조정해 주세요.")
             
         run_port = st.sidebar.button("📊 포트폴리오 분석 실행", use_container_width=True, disabled=not w_validation)
         
-        # 시뮬레이션 작동
         if run_port or 'port_run' not in st.session_state:
             st.session_state['port_run'] = True
             
@@ -809,7 +787,7 @@ else:
                 df_port = portfolio_engine.get_portfolio_data(parsed_tickers, start_date, end_date)
                 
                 if df_port is None or len(df_port) < 10:
-                    st.error("충분한 주가 데이터를 확보하지 못했습니다. 입력하신 종목의 티커(yfinance 규격) 및 수집 기간을 다시 확인하세요.")
+                    st.error("충분한 주가 데이터를 확보하지 못했습니다. 입력하신 종목의 티커 및 수집 기간을 다시 확인하세요.")
                 else:
                     # 1) 포트폴리오 결합 백테스트 (리밸런싱 & 적립식 포함)
                     port_weights = [w / 100.0 for w in weights]
@@ -820,10 +798,9 @@ else:
                     # 2) MPT 포트폴리오 최적화 연산
                     opt_res = portfolio_engine.optimize_portfolio(df_port)
                     
-                    # 요약 지표 카드 렌더링 (Portfolio Visualizer 스타일)
+                    # 요약 지표 카드 렌더링
                     st.markdown("### 🏆 포트폴리오 종합 성과 요약")
                     
-                    # 1행 성과 리포트
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.markdown(
@@ -872,7 +849,7 @@ else:
                         
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # 2행 성과 리포트 (고급 지표)
+                    # 2행 성과 리포트
                     col5, col6, col7, col8 = st.columns(4)
                     with col5:
                         st.markdown(
@@ -921,75 +898,164 @@ else:
                         
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # 도넛 차트 및 누적 수익률 비교
-                    col_chart1, col_chart2 = st.columns([1, 1.8])
+                    # 탭 기반 결과 분리 구성 (기능 대폭 추가)
+                    tab_assets, tab_benchmarks, tab_correlation = st.tabs([
+                        "📈 자산 성과 곡선 & 비중", 
+                        "⚖️ 벤치마크 시장 비교", 
+                        "🔗 자산 상관관계 분석"
+                    ])
                     
-                    with col_chart1:
-                        st.markdown("##### 🍩 현재 포트폴리오 자산 배분 비중")
-                        donut_fig = go.Figure(data=[go.Pie(
-                            labels=parsed_tickers,
-                            values=weights,
-                            hole=.4,
-                            marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#19D3F3', '#FF6692'])
-                        )])
-                        donut_fig.update_layout(
-                            template="plotly_dark",
-                            height=350,
-                            margin=dict(l=10, r=10, t=10, b=10),
-                            legend=dict(orientation="h", y=-0.1)
-                        )
-                        st.plotly_chart(donut_fig, use_container_width=True)
+                    with tab_assets:
+                        col_chart1, col_chart2 = st.columns([1, 1.8])
                         
-                    with col_chart2:
-                        st.markdown("##### 📈 자산별 누적 자산 성장 곡선 (적립금 반영)")
-                        line_fig = go.Figure()
-                        
-                        # 결합 포트폴리오 곡선
-                        line_fig.add_trace(go.Scatter(
-                            x=res['df'].index,
-                            y=res['df']['Portfolio_Value'],
-                            name="내 포트폴리오",
-                            line=dict(color="#F1C40F", width=3)
-                        ))
-                        
-                        # 개별 자산 곡선들
-                        for ticker in parsed_tickers:
-                            p_shares = 0.0
-                            p_cash = initial_capital
-                            p_values = []
-                            p_prices = df_port[ticker].values
-                            p_dates = df_port.index
+                        with col_chart1:
+                            st.markdown("##### 🍩 현재 포트폴리오 자산 배분 비중")
+                            donut_fig = go.Figure(data=[go.Pie(
+                                labels=parsed_tickers,
+                                values=weights,
+                                hole=.4,
+                                marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#19D3F3', '#FF6692'])
+                            )])
+                            donut_fig.update_layout(
+                                template="plotly_dark",
+                                height=350,
+                                margin=dict(l=10, r=10, t=10, b=10),
+                                legend=dict(orientation="h", y=-0.1)
+                            )
+                            st.plotly_chart(donut_fig, use_container_width=True)
                             
-                            # 첫날 매입
-                            p_shares = p_cash / p_prices[0]
-                            p_cash = 0.0
-                            p_values.append(initial_capital)
+                        with col_chart2:
+                            st.markdown("##### 📈 자산별 누적 자산 성장 곡선 (적립금 반영)")
+                            line_fig = go.Figure()
                             
-                            p_prev_date = p_dates[0]
-                            for idx in range(1, len(df_port)):
-                                c_date = p_dates[idx]
-                                c_price = p_prices[idx]
-                                
-                                if c_date.month != p_prev_date.month and contribution_amount > 0:
-                                    p_shares += (contribution_amount / c_price)
-                                    
-                                p_values.append(p_shares * c_price)
-                                p_prev_date = c_date
-                                
                             line_fig.add_trace(go.Scatter(
-                                x=df_port.index,
-                                y=p_values,
-                                name=f"{ticker} (100% 몰빵)",
-                                line=dict(width=1.2, dash="dash")
+                                x=res['df'].index,
+                                y=res['df']['Portfolio_Value'],
+                                name="내 포트폴리오",
+                                line=dict(color="#F1C40F", width=3)
                             ))
                             
-                        line_fig.update_layout(
+                            for ticker in parsed_tickers:
+                                p_shares = 0.0
+                                p_cash = initial_capital
+                                p_values = []
+                                p_prices = df_port[ticker].values
+                                p_dates = df_port.index
+                                
+                                p_shares = p_cash / p_prices[0]
+                                p_cash = 0.0
+                                p_values.append(initial_capital)
+                                
+                                p_prev_date = p_dates[0]
+                                for idx in range(1, len(df_port)):
+                                    c_date = p_dates[idx]
+                                    c_price = p_prices[idx]
+                                    
+                                    if c_date.month != p_prev_date.month and contribution_amount > 0:
+                                        p_shares += (contribution_amount / c_price)
+                                        
+                                    p_values.append(p_shares * c_price)
+                                    p_prev_date = c_date
+                                    
+                                line_fig.add_trace(go.Scatter(
+                                    x=df_port.index,
+                                    y=p_values,
+                                    name=f"{ticker} (100% 몰빵)",
+                                    line=dict(width=1.2, dash="dash")
+                                ))
+                                
+                            line_fig.update_layout(
+                                template="plotly_dark",
+                                height=350,
+                                margin=dict(l=20, r=20, t=10, b=20),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                            )
+                            st.plotly_chart(line_fig, use_container_width=True)
+                            
+                    with tab_benchmarks:
+                        st.markdown("##### ⚖️ 내 포트폴리오 vs 주요 시장 지수 (SPY, QQQ) 정밀 성과 비교")
+                        st.write("초기 자본과 자금 흐름(적립금) 조건이 시장 지수에 동일하게 투자되었을 때의 성과 대조 보고서입니다.")
+                        
+                        # 벤치마크 SPY, QQQ 데이터 다운로드
+                        bench_tickers = ["SPY", "QQQ"]
+                        df_bench = portfolio_engine.get_portfolio_data(bench_tickers, start_date, end_date)
+                        
+                        if df_bench is not None and not df_bench.empty:
+                            # 벤치마크 백테스트 실행 (100% 비중으로 가상 구성)
+                            spy_res = portfolio_engine.backtest_portfolio(
+                                pd.DataFrame(df_bench["SPY"]), [1.0], initial_capital, rebalance_period, contribution_amount
+                            )
+                            qqq_res = portfolio_engine.backtest_portfolio(
+                                pd.DataFrame(df_bench["QQQ"]), [1.0], initial_capital, rebalance_period, contribution_amount
+                            )
+                            
+                            # 비교 데이터프레임 빌드
+                            comp_data = {
+                                "자산명": ["내 포트폴리오", "S&P 500 (SPY)", "Nasdaq 100 (QQQ)"],
+                                "최종 가치": [res["final_value"], spy_res["final_value"], qqq_res["final_value"]],
+                                "총 수익률": [res["total_return"], spy_res["total_return"], qqq_res["total_return"]],
+                                "연평균 수익률 (CAGR)": [res["cagr"], spy_res["cagr"], qqq_res["cagr"]],
+                                "연간 변동성": [res["std_dev"], spy_res["std_dev"], qqq_res["std_dev"]],
+                                "샤프 비율 (Sharpe)": [res["sharpe_ratio"], spy_res["sharpe_ratio"], qqq_res["sharpe_ratio"]],
+                                "소르티노 비율 (Sortino)": [res["sortino_ratio"], spy_res["sortino_ratio"], qqq_res["sortino_ratio"]],
+                                "최대 낙폭 (MDD)": [res["mdd"], spy_res["mdd"], qqq_res["mdd"]]
+                            }
+                            df_comp = pd.DataFrame(comp_data)
+                            
+                            st.dataframe(
+                                df_comp.style.format({
+                                    "최종 가치": "{:,.2f}",
+                                    "총 수익률": "{:+.2f}%",
+                                    "연평균 수익률 (CAGR)": "{:.2f}%",
+                                    "연간 변동성": "{:.2f}%",
+                                    "샤프 비율 (Sharpe)": "{:.2f}",
+                                    "소르티노 비율 (Sortino)": "{:.2f}",
+                                    "최대 낙폭 (MDD)": "{:.2f}%"
+                                }),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                            
+                            # 3자 성과 곡선 렌더링
+                            bench_fig = go.Figure()
+                            bench_fig.add_trace(go.Scatter(x=res['df'].index, y=res['df']['Portfolio_Value'], name="내 포트폴리오", line=dict(color="#F1C40F", width=3)))
+                            bench_fig.add_trace(go.Scatter(x=spy_res['df'].index, y=spy_res['df']['Portfolio_Value'], name="S&P 500 (SPY)", line=dict(color="#FF4B4B", width=1.5, dash="dash")))
+                            bench_fig.add_trace(go.Scatter(x=qqq_res['df'].index, y=qqq_res['df']['Portfolio_Value'], name="Nasdaq 100 (QQQ)", line=dict(color="#00CC96", width=1.5, dash="dot")))
+                            
+                            bench_fig.update_layout(
+                                template="plotly_dark",
+                                height=350,
+                                margin=dict(l=20, r=20, t=10, b=20),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                            )
+                            st.plotly_chart(bench_fig, use_container_width=True)
+                        else:
+                            st.info("비교 벤치마크 데이터를 로드할 수 없습니다.")
+                            
+                    with tab_correlation:
+                        st.markdown("##### 🔗 구성 자산 간 상관관계 행렬 (Correlation Matrix) 히트맵")
+                        st.write("자산들 사이의 상관계수는 -1.0(반대 방향)부터 +1.0(완벽히 같은 방향)까지 나타나며, 상관계수가 낮을수록 포트폴리오 분산 투자 위험 회피 효과가 우수합니다.")
+                        
+                        corr_df = portfolio_engine.calculate_correlation(df_port)
+                        
+                        # 히트맵 시각화
+                        heatmap_fig = go.Figure(data=go.Heatmap(
+                            z=corr_df.values,
+                            x=corr_df.columns,
+                            y=corr_df.index,
+                            colorscale='RdBu_r', # Red-Blue 스케일로 상관도가 높으면 붉은색, 낮으면 파란색 매핑
+                            zmin=-1.0,
+                            zmax=1.0,
+                            text=[[f"{val:.2f}" for val in row] for row in corr_df.values],
+                            texttemplate="%{text}",
+                            hoverongaps=False
+                        ))
+                        heatmap_fig.update_layout(
                             template="plotly_dark",
                             height=350,
-                            margin=dict(l=20, r=20, t=10, b=20),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                            margin=dict(l=40, r=40, t=10, b=40),
                         )
-                        st.plotly_chart(line_fig, use_container_width=True)
+                        st.plotly_chart(heatmap_fig, use_container_width=True)
                         
                     # ----------------- 📊 연도별 수익률 막대 차트 -----------------
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -1054,8 +1120,6 @@ else:
                     sim_data = opt_res['raw_sim']
                     
                     scat_fig = go.Figure()
-                    
-                    # 1) 시뮬레이션 도트
                     scat_fig.add_trace(go.Scatter(
                         x=sim_data['Volatility'] * 100,
                         y=sim_data['Return'] * 100,
@@ -1070,7 +1134,6 @@ else:
                         name="시뮬레이션 포트폴리오"
                     ))
                     
-                    # 2) Max Sharpe 포인트 별표 강조
                     scat_fig.add_trace(go.Scatter(
                         x=[opt_res['max_sharpe']['volatility']],
                         y=[opt_res['max_sharpe']['return']],
@@ -1079,7 +1142,6 @@ else:
                         name="Max Sharpe"
                     ))
                     
-                    # 3) Min Vol 포인트 다이아몬드 강조
                     scat_fig.add_trace(go.Scatter(
                         x=[opt_res['min_vol']['volatility']],
                         y=[opt_res['min_vol']['return']],
@@ -1115,7 +1177,7 @@ else:
                 {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
             ])
             
-        # 스프레드시트 에디터 지원
+        # 💡 st.data_editor에 on_change 콜백(sync_editor_data)을 직접 적용하여 Rerun 시 숫자 유실 현상 차단
         edited_df = st.data_editor(
             st.session_state['my_portfolio_data'],
             num_rows="dynamic",
@@ -1125,10 +1187,12 @@ else:
                 "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, format="%.2f", required=True),
                 "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, format="%.2f", required=True)
             },
-            key="portfolio_editor"
+            key="portfolio_editor",
+            on_change=sync_editor_data  # 실시간 상태 보존 콜백 엔진 연동!
         )
         
-        st.session_state['my_portfolio_data'] = edited_df
+        # 콜백이 실행되어 세션 값이 바뀐 후 화면 렌더링에 사용할 임시 DF 매핑
+        df_for_calc = st.session_state['my_portfolio_data']
         
         col_btn, _ = st.columns([1, 3])
         with col_btn:
@@ -1137,8 +1201,7 @@ else:
         if calc_run or 'calc_run_state' not in st.session_state:
             st.session_state['calc_run_state'] = True
             
-            # 입력값 검증
-            df_valid = edited_df.dropna(subset=["티커", "매수 평단가", "보유 수량"])
+            df_valid = df_for_calc.dropna(subset=["티커", "매수 평단가", "보유 수량"])
             df_valid = df_valid[df_valid["티커"].str.strip() != ""]
             
             if df_valid.empty:
@@ -1197,11 +1260,9 @@ else:
                     else:
                         df_res = pd.DataFrame(results)
                         
-                        # 총합 성과 산정
                         total_profit = total_eval_value - total_buy_value
                         total_profit_pct = (total_profit / total_buy_value) * 100 if total_buy_value > 0 else 0
                         
-                        # 실시간 요약 메트릭
                         st.markdown("### 🏆 실시간 보유 자산 총계 요약")
                         c_m1, c_m2, c_m3, c_m4 = st.columns(4)
                         
@@ -1242,7 +1303,6 @@ else:
                                 unsafe_allow_html=True
                             )
                             
-                        # 개별 종목 그리드 카드
                         st.markdown("<br>##### 📊 자산별 실시간 평가 손익 현황", unsafe_allow_html=True)
                         
                         col_cards = st.columns(len(df_res))
@@ -1268,7 +1328,6 @@ else:
                                 </div>
                             """, unsafe_allow_html=True)
                             
-                        # 실시간 비중 도넛 차트 & 리스크 진단
                         st.markdown("<br>", unsafe_allow_html=True)
                         c_div1, c_div2 = st.columns([1.2, 1.8])
                         
@@ -1333,10 +1392,7 @@ else:
         st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Dynamic Stock Backtester</h1>', unsafe_allow_html=True)
         st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">수정 종가(Adjusted Close)와 정밀한 슬리피지/세금을 반영한 실전용 백테스터</p>', unsafe_allow_html=True)
 
-        # 1. 티커 및 기간 설정
         st.sidebar.subheader("1. 대상 종목 & 기간")
-        
-        # 실시간 제안 리스트 연동 백테스터 티커 입력창
         st.sidebar.write("🔍 실시간 티커 사전 위젯을 통해 검색한 정확한 티커명을 아래에 입력하세요.")
         ticker_input = st.sidebar.text_input("주식 티커 입력 (yfinance 규격)", value="AAPL")
         st.sidebar.caption("💡 팁: 나스닥은 'AAPL', 'TSLA' 등 / 코스피는 '005930.KS', 코스닥은 '091990.KQ'")
@@ -1346,33 +1402,27 @@ else:
         start_date = st.sidebar.date_input("시작일", default_start)
         end_date = st.sidebar.date_input("종료일", today)
 
-        # 2. 투자 조건 설정
         st.sidebar.subheader("2. 실전 투자 조건")
         initial_capital = st.sidebar.number_input("초기 투자금 ($ 또는 ₩)", min_value=1000, value=10000, step=1000)
         commission_pct = st.sidebar.slider("증권사 수수료 (%)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
         slippage_pct = st.sidebar.slider("슬리피지 (Slippage, %)", min_value=0.0, max_value=1.0, value=0.1, step=0.05) / 100.0
         tax_pct = st.sidebar.slider("거래세 (Tax, %)", min_value=0.0, max_value=1.0, value=0.18, step=0.02) / 100.0
 
-        # 3. 벤치마크 지수 설정
         st.sidebar.subheader("3. 비교 벤치마크 지수")
         benchmark_option = st.sidebar.selectbox(
             "비교 대상 시장 지수", 
             ["선택 안 함", "S&P 500 (^GSPC)", "Nasdaq 100 (QQQ)", "KOSPI (^KS11)", "KOSDAQ (^KQ11)"]
         )
 
-        # 4. SMA 변수 설정
         st.sidebar.subheader("4. 이동평균선(SMA) 설정")
         short_window = st.sidebar.number_input("단기 이평선 기간 (일)", min_value=2, max_value=100, value=20)
         long_window = st.sidebar.number_input("장기 이평선 기간 (일)", min_value=5, max_value=300, value=50)
 
-        # 이평선 크기 유효성 검사
         if short_window >= long_window:
             st.sidebar.error("단기 이평선 기간은 장기 이평선 기간보다 작아야 합니다!")
 
-        # 실행 버튼
         run_button = st.sidebar.button("⚡ 백테스트 실행", use_container_width=True)
 
-        # ----------------- 실행 및 결과 출력 -----------------
         if run_button or 'backtest_run' not in st.session_state:
             st.session_state['backtest_run'] = True
             
@@ -1385,7 +1435,6 @@ else:
                     if df is None or len(df) < long_window:
                         st.error("데이터를 불러오지 못했거나 백테스트를 위한 충분한 역사적 데이터가 없습니다.")
                     else:
-                        # 벤치마크 데이터 로딩 및 계산
                         benchmark_df = None
                         if benchmark_option != "선택 안 함":
                             bench_ticker = benchmark_option.split("(")[-1].replace(")", "")
@@ -1397,11 +1446,9 @@ else:
                                 benchmark_df['Benchmark_CumReturn'] = (1 + benchmark_df['Daily_Return']).cumprod()
                                 benchmark_df['Benchmark_Value'] = initial_capital * benchmark_df['Benchmark_CumReturn']
 
-                        # 백테스트 수행
                         results = run_backtest(df, short_window, long_window, initial_capital, commission_pct, slippage_pct, tax_pct)
                         metrics = calculate_metrics(results, initial_capital, benchmark_df)
                         
-                        # 결과 지표 대시보드
                         st.markdown("### 🏆 백테스트 성과 지표 비교")
                         col1, col2, col3, col4 = st.columns(4)
                         
@@ -1460,8 +1507,6 @@ else:
                             )
                         
                         st.markdown("<br>", unsafe_allow_html=True)
-                        
-                        # Plotly 시각화 구성
                         st.markdown("### 📈 인터랙티브 차트 분석")
                         
                         fig = make_subplots(
@@ -1471,13 +1516,11 @@ else:
                             row_heights=[0.6, 0.4]
                         )
                         
-                        # 1. 주가 데이터 추가
                         fig.add_trace(
                             go.Scatter(x=results.index, y=results['Close'], name='Close Price', line=dict(color='#636EFA', width=1.5)),
                             row=1, col=1
                         )
                         
-                        # 2. 이평선 추가
                         fig.add_trace(
                             go.Scatter(x=results.index, y=results['Short_SMA'], name=f'{short_window} SMA', line=dict(color='#00CC96', width=1, dash='dash')),
                             row=1, col=1
@@ -1487,7 +1530,6 @@ else:
                             row=1, col=1
                         )
                         
-                        # 3. 매매 시그널 마커 추가
                         buys = results[results['Action'] == 1]
                         sells = results[results['Action'] == -1]
                         
@@ -1506,7 +1548,6 @@ else:
                             row=1, col=1
                         )
                         
-                        # 4. 누적 포트폴리오 가치 추가
                         fig.add_trace(
                             go.Scatter(x=results.index, y=results['Portfolio_Value'], name='SMA Strategy', line=dict(color='#F1C40F', width=2)),
                             row=2, col=1
@@ -1516,14 +1557,12 @@ else:
                             row=2, col=1
                         )
                         
-                        # 벤치마크 가치 곡선 오버레이
                         if benchmark_df is not None:
                             fig.add_trace(
                                 go.Scatter(x=benchmark_df.index, y=benchmark_df['Benchmark_Value'], name=benchmark_option, line=dict(color='#9B59B6', width=1.5, dash='dashdot')),
                                 row=2, col=1
                             )
                         
-                        # 차트 레이아웃 스타일 설정
                         fig.update_layout(
                             height=700,
                             hovermode='x unified',
@@ -1539,7 +1578,6 @@ else:
                         
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # 상세 거래 내역 데이터 테이블 제공
                         with st.expander("📝 상세 거래 로그 및 역사적 데이터 보기"):
                             trade_log = results[results['Action'] != 0][['Close', 'Short_SMA', 'Long_SMA', 'Action', 'Portfolio_Value']]
                             trade_log['Action'] = trade_log['Action'].map({1: '매수 (BUY)', -1: '매도 (SELL)'})

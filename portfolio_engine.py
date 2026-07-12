@@ -240,3 +240,9 @@ def optimize_portfolio(df, num_portfolios=2000):
             "weights": {ticker: min_vol_portfolio[ticker] * 100 for ticker in df.columns}
         }
     }
+
+def calculate_correlation(df):
+    """자산 간 일별 수익률 피어슨 상관계수 행렬을 계산하여 데이터프레임으로 반환"""
+    returns = df.pct_change().dropna()
+    corr_matrix = returns.corr()
+    return corr_matrix
