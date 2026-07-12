@@ -1449,33 +1449,33 @@ else:
                             
                         # 간편 현금 자산 추가 연동
                         if cash_krw_input > 0:
+                            krw_in_usd = cash_krw_input / usd_krw_rate
                             results.append({
                                 "티커": "CASH (₩)",
-                                "평단가": 1.0,
-                                "현재가": 1.0,
+                                "평단가": 1.0 / usd_krw_rate,
+                                "현재가": 1.0 / usd_krw_rate,
                                 "보유수량": cash_krw_input,
-                                "매입금액": cash_krw_input,
-                                "평가금액": cash_krw_input,
+                                "매입금액": krw_in_usd,
+                                "평가금액": krw_in_usd,
                                 "평가손익": 0.0,
                                 "수익률": 0.0
                             })
-                            total_buy_value += cash_krw_input
-                            total_eval_value += cash_krw_input
+                            total_buy_value += krw_in_usd
+                            total_eval_value += krw_in_usd
                             
                         if cash_usd_input > 0:
-                            usd_in_krw = cash_usd_input * usd_krw_rate
                             results.append({
                                 "티커": "CASH ($)",
-                                "평단가": usd_krw_rate,
-                                "현재가": usd_krw_rate,
+                                "평단가": 1.0,
+                                "현재가": 1.0,
                                 "보유수량": cash_usd_input,
-                                "매입금액": usd_in_krw,
-                                "평가금액": usd_in_krw,
+                                "매입금액": cash_usd_input,
+                                "평가금액": cash_usd_input,
                                 "평가손익": 0.0,
                                 "수익률": 0.0
                             })
-                            total_buy_value += usd_in_krw
-                            total_eval_value += usd_in_krw
+                            total_buy_value += cash_usd_input
+                            total_eval_value += cash_usd_input
                             
                         df_res = pd.DataFrame(results)
                         
@@ -1705,15 +1705,18 @@ else:
                             })
                             
                             # 3. 오늘의 상승 vs 하락 자산 승률 통계 (Market Breadth)
-                            up_count = len(df_res[df_res['평가손익'] >= 0])
-                            down_count = len(df_res[df_res['평가손익'] < 0])
-                            win_ratio = (up_count / num_tickers) * 100 if num_tickers > 0 else 0
+                            # 현금 자산(CASH)은 상승/하락 자산 승률 통계에서 제외하여 순수 주식 변동률만 산정
+                            df_stocks = df_res[~df_res['티커'].str.contains("CASH", case=False, na=False)]
+                            up_count = len(df_stocks[df_stocks['평가손익'] > 0]) # 이익 상태 (보합 및 현금 제외)
+                            down_count = len(df_stocks[df_stocks['평가손익'] < 0])
+                            num_stocks = len(df_stocks)
+                            win_ratio = (up_count / num_stocks) * 100 if num_stocks > 0 else 0
                             
                             diagnostics.append({
                                 "type": "breadth",
                                 "color": "#3B82F6",
                                 "title": f"📈 포트폴리오 상승 종목 승률: {up_count}승 {down_count}패",
-                                "desc": f"현재 전체 {num_tickers}개 보유 종목 중 {up_count}개 종목이 이익 상태이며, {down_count}개 종목이 평가 손실을 기록하고 있습니다. (자산 승률: **{win_ratio:.1f}%**)"
+                                "desc": f"현재 전체 {num_stocks}개 보유 종목 중 {up_count}개 종목이 이익 상태이며, {down_count}개 종목이 평가 손실을 기록하고 있습니다. (자산 승률: **{win_ratio:.1f}%**, 현금 잔고 제외)"
                             })
                             
                             # 4. 개별 종목별 쏠림 위험, 10% 이상 손실 경보 및 자산 속성 위험(레버리지 등) 진단
