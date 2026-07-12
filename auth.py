@@ -241,7 +241,7 @@ def send_account_info_email(to_email, subject, content_title, content_desc, valu
         return False, f"이메일 발송 실패: {e} (오류가 지속되면 auth.py의 SMTP 설정을 확인해 주세요)"
 
 def delete_user(username):
-    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴) - 대소문자 무시 매칭"""
+    """관리자용: 특정 사용자 계정 삭제(강제 탈퇴) - 공백/대소문자 완벽 무시 매칭"""
     init_db()
     username = username.strip()
     if not username:
@@ -254,12 +254,12 @@ def delete_user(username):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        # 대소문자 무시하고 유저 존재 여부 확인 (COLLATE NOCASE 적용)
-        cursor.execute("SELECT username FROM users WHERE username = ? COLLATE NOCASE", (username,))
+        # 데이터베이스 내부의 아이디 앞뒤 공백(TRIM)과 대소문자를 모두 지우고 완벽하게 확인
+        cursor.execute("SELECT username FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
         if not cursor.fetchone():
             return False, "존재하지 않는 회원입니다."
             
-        cursor.execute("DELETE FROM users WHERE username = ? COLLATE NOCASE", (username,))
+        cursor.execute("DELETE FROM users WHERE TRIM(username) = TRIM(?) COLLATE NOCASE", (username,))
         conn.commit()
         return True, f"회원 '{username}' 계정이 성공적으로 탈퇴 처리되었습니다."
     except Exception as e:
