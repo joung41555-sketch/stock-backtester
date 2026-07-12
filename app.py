@@ -23,6 +23,15 @@ st.markdown("""
         font-family: 'Outfit', sans-serif;
     }
     
+    /* 우측 상단 깃허브 버튼, 메뉴 버튼 및 하단 푸터 숨기기 */
+    .stAppDeployButton, header, #MainMenu {
+        visibility: hidden;
+        display: none !important;
+    }
+    footer {
+        visibility: hidden;
+    }
+    
     .main-title {
         font-size: 3rem;
         font-weight: 800;
