@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import auth  # 사용자 정의 인증 모듈 임포트
+import portfolio_engine  # MPT 포트폴리오 엔진 임포트
 import random
 import string
 
@@ -129,6 +130,15 @@ st.markdown("""
         border: 1px solid #334155;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         margin-bottom: 0.5rem;
+    }
+    
+    /* 포트폴리오 최적화 카드 */
+    .opt-card {
+        background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid #FF4B4B;
+        margin-bottom: 1rem;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -601,7 +611,7 @@ if not st.session_state['logged_in']:
 # =======================================================
 else:
     # 사이드바 설정 영역
-    st.sidebar.header("⚙️ 백테스트 설정")
+    st.sidebar.header("⚙️ 설정 및 메뉴")
     
     st.sidebar.markdown(f"👤 **{st.session_state['username']}**님 환영합니다!")
     if st.sidebar.button("🔓 로그아웃", use_container_width=True):
@@ -623,11 +633,16 @@ else:
         st.sidebar.subheader("⚙️ 관리자 전용 메뉴")
         admin_mode = st.sidebar.radio(
             "화면 모드 선택",
-            ["📈 백테스터 실행", "👥 가입 회원 관리"]
+            ["📈 백테스터 실행", "💼 포트폴리오 분석", "👥 가입 회원 관리"]
         )
         st.sidebar.markdown("---")
     else:
-        admin_mode = "📈 백테스터 실행"
+        st.sidebar.subheader("📂 메뉴 선택")
+        admin_mode = st.sidebar.radio(
+            "화면 모드 선택",
+            ["📈 백테스터 실행", "💼 포트폴리오 분석"]
+        )
+        st.sidebar.markdown("---")
 
     # =======================================================
     #                      관리자 전용 대시보드 화면
@@ -700,6 +715,350 @@ else:
                     st.error(msg)
         else:
             st.info("현재 관리자 계정 외에 가입된 일반 회원 계정이 존재하지 않습니다.")
+
+    # =======================================================
+    #                  💼 포트폴리오 분석 및 최적화 (Visualizer 스펙)
+    # =======================================================
+    elif admin_mode == "💼 포트폴리오 분석":
+        st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">💼 Portfolio Visualizer 분석 엔진</h1>', unsafe_allow_html=True)
+        st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">자동 주기 리밸런싱, 매월 추가 적립 및 소르티노 지수와 연도별 상세 수익률 차트 분석</p>', unsafe_allow_html=True)
+        
+        # 사이드바 입력 설정
+        st.sidebar.subheader("1. 포트폴리오 구성 종목")
+        tickers_input = st.sidebar.text_input("종목 티커 입력 (쉼표 구분)", value="AAPL, NVDA, TSLA, MSFT")
+        parsed_tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+        
+        today = datetime.today()
+        default_start = today - timedelta(days=365 * 3)
+        start_date = st.sidebar.date_input("분석 시작일", default_start)
+        end_date = st.sidebar.date_input("분석 종료일", today)
+        
+        st.sidebar.subheader("2. 초기 자본 및 자금 흐름")
+        initial_capital = st.sidebar.number_input("초기 투자 금액", min_value=1000, value=10000, step=1000)
+        contribution_amount = st.sidebar.number_input("매월 추가 납입액 (적립금)", min_value=0, value=0, step=100)
+        
+        rebalance_period = st.sidebar.selectbox(
+            "자산 비중 리밸런싱 주기 (Rebalancing)",
+            ["None", "Monthly", "Annually"]
+        )
+        
+        # 3) 종목별 자산 배분 비중 동적 입력기 구성
+        st.sidebar.subheader("3. 자산별 투자 비중 설정")
+        weights = []
+        
+        # 동적 슬라이더 생성
+        for ticker in parsed_tickers:
+            w_val = st.sidebar.slider(f"{ticker} 비중 (%)", min_value=0, max_value=100, value=100 // len(parsed_tickers))
+            weights.append(w_val)
+            
+        sum_weights = sum(weights)
+        st.sidebar.markdown(f"**현재 비중 총합:** `{sum_weights}%` (반드시 **100%** 여야 함)")
+        
+        # 합이 100%가 아닌 경우 에러 경고
+        w_validation = (sum_weights == 100)
+        if not w_validation:
+            st.sidebar.warning("⚠️ 모든 자산 비중의 총합이 100%가 되도록 조정해 주세요.")
+            
+        run_port = st.sidebar.button("📊 포트폴리오 분석 실행", use_container_width=True, disabled=not w_validation)
+        
+        # 시뮬레이션 작동
+        if run_port or 'port_run' not in st.session_state:
+            st.session_state['port_run'] = True
+            
+            with st.spinner("다중 자산 주가 데이터를 분석하고 Portfolio Visualizer 엔진 시뮬레이션 수행 중..."):
+                df_port = portfolio_engine.get_portfolio_data(parsed_tickers, start_date, end_date)
+                
+                if df_port is None or len(df_port) < 10:
+                    st.error("충분한 주가 데이터를 확보하지 못했습니다. 입력하신 종목의 티커(yfinance 규격) 및 수집 기간을 다시 확인하세요.")
+                else:
+                    # 1) 포트폴리오 결합 백테스트 (리밸런싱 & 적립식 포함)
+                    port_weights = [w / 100.0 for w in weights]
+                    res = portfolio_engine.backtest_portfolio(
+                        df_port, port_weights, initial_capital, rebalance_period, contribution_amount
+                    )
+                    
+                    # 2) MPT 포트폴리오 최적화 연산
+                    opt_res = portfolio_engine.optimize_portfolio(df_port)
+                    
+                    # 요약 지표 카드 렌더링 (Portfolio Visualizer 스타일)
+                    st.markdown("### 🏆 포트폴리오 종합 성과 요약")
+                    
+                    # 1행 성과 리포트
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">최종 포트폴리오 가치</div>
+                                <div class="metric-value">{res['final_value']:,.2f}</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    총 투자 원금: {res['total_invested']:,.2f}
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col2:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">연평균 복리 수익률 (CAGR)</div>
+                                <div class="metric-value">{res['cagr']:.2f}%</div>
+                                <div style="color: {'#10B981' if res['total_return'] >= 0 else '#EF4444'}; font-weight: 600; font-size: 0.85rem;">
+                                    총 수익률: {'+' if res['total_return'] >= 0 else ''}{res['total_return']:.2f}%
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col3:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">연도별 리스크 (변동성)</div>
+                                <div class="metric-value" style="color: #AB63FA;">{res['std_dev']:.2f}%</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    포트폴리오 표준편차
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col4:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">최대 낙폭 (Max. Drawdown)</div>
+                                <div class="metric-value" style="color: #EF4444;">{res['mdd']:.2f}%</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    고점 대비 최대 하락폭
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                        
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # 2행 성과 리포트 (고급 지표)
+                    col5, col6, col7, col8 = st.columns(4)
+                    with col5:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">샤프 비율 (Sharpe Ratio)</div>
+                                <div class="metric-value" style="color: #3B82F6;">{res['sharpe_ratio']:.2f}</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    위험 대비 보상 효율성
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col6:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">소르티노 비율 (Sortino Ratio)</div>
+                                <div class="metric-value" style="color: #10B981;">{res['sortino_ratio']:.2f}</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    하방 위험(하락일) 대비 리턴
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col7:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">최고의 해 성과 (Best Year)</div>
+                                <div class="metric-value" style="color: #10B981;">+{res['best_year']:.2f}%</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    최고 연도별 수익률
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                    with col8:
+                        st.markdown(
+                            f"""<div class="metric-card">
+                                <div class="metric-label">최악의 해 성과 (Worst Year)</div>
+                                <div class="metric-value" style="color: #EF4444;">{res['worst_year']:.2f}%</div>
+                                <div style="color: #94A3B8; font-size: 0.85rem;">
+                                    최저 연도별 수익률
+                                </div>
+                            </div>""", 
+                            unsafe_allow_html=True
+                        )
+                        
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # 도넛 차트 및 누적 수익률 비교
+                    col_chart1, col_chart2 = st.columns([1, 1.8])
+                    
+                    with col_chart1:
+                        st.markdown("##### 🍩 현재 포트폴리오 자산 배분 비중")
+                        donut_fig = go.Figure(data=[go.Pie(
+                            labels=parsed_tickers,
+                            values=weights,
+                            hole=.4,
+                            marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#19D3F3', '#FF6692'])
+                        )])
+                        donut_fig.update_layout(
+                            template="plotly_dark",
+                            height=350,
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            legend=dict(orientation="h", y=-0.1)
+                        )
+                        st.plotly_chart(donut_fig, use_container_width=True)
+                        
+                    with col_chart2:
+                        st.markdown("##### 📈 자산별 누적 자산 성장 곡선 (적립금 반영)")
+                        # 개별 자산들의 단순 Buy & Hold 누적 성과 비교
+                        line_fig = go.Figure()
+                        
+                        # 결합 포트폴리오 곡선
+                        line_fig.add_trace(go.Scatter(
+                            x=res['df'].index,
+                            y=res['df']['Portfolio_Value'],
+                            name="내 포트폴리오",
+                            line=dict(color="#F1C40F", width=3)
+                        ))
+                        
+                        # 개별 자산 곡선들
+                        for ticker in parsed_tickers:
+                            # 개별 종목도 동일하게 적립 투자 적용하여 공정하게 시뮬레이션
+                            p_shares = 0.0
+                            p_cash = initial_capital
+                            p_values = []
+                            p_prices = df_port[ticker].values
+                            p_dates = df_port.index
+                            
+                            # 첫날 매입
+                            p_shares = p_cash / p_prices[0]
+                            p_cash = 0.0
+                            p_values.append(initial_capital)
+                            
+                            p_prev_date = p_dates[0]
+                            for idx in range(1, len(df_port)):
+                                c_date = p_dates[idx]
+                                c_price = p_prices[idx]
+                                
+                                if c_date.month != p_prev_date.month and contribution_amount > 0:
+                                    p_shares += (contribution_amount / c_price)
+                                    
+                                p_values.append(p_shares * c_price)
+                                p_prev_date = c_date
+                                
+                            line_fig.add_trace(go.Scatter(
+                                x=df_port.index,
+                                y=p_values,
+                                name=f"{ticker} (100% 몰빵)",
+                                line=dict(width=1.2, dash="dash")
+                            ))
+                            
+                        line_fig.update_layout(
+                            template="plotly_dark",
+                            height=350,
+                            margin=dict(l=20, r=20, t=10, b=20),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        )
+                        st.plotly_chart(line_fig, use_container_width=True)
+                        
+                    # ----------------- 📊 연도별 수익률 막대 차트 (신설) -----------------
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("### 📊 연도별 수익률 통계 (Annual Returns)")
+                    
+                    df_yr = pd.DataFrame(res['yearly_returns'])
+                    if not df_yr.empty:
+                        col_yr1, col_yr2 = st.columns([2, 1])
+                        
+                        with col_yr1:
+                            bar_fig = go.Figure(data=[go.Bar(
+                                x=df_yr['Year'],
+                                y=df_yr['Return'],
+                                marker_color=['#10B981' if r >= 0 else '#EF4444' for r in df_yr['Return']],
+                                text=[f"{r:+.1f}%" for r in df_yr['Return']],
+                                textposition='auto'
+                            )])
+                            bar_fig.update_layout(
+                                template="plotly_dark",
+                                height=300,
+                                xaxis_title="연도 (Year)",
+                                yaxis_title="연간 수익률 (%)",
+                                margin=dict(l=40, r=20, t=10, b=35)
+                            )
+                            st.plotly_chart(bar_fig, use_container_width=True)
+                            
+                        with col_yr2:
+                            # 표 데이터 가독성 좋게 변경
+                            df_yr_styled = df_yr.copy()
+                            df_yr_styled['Return'] = df_yr_styled['Return'].map(lambda x: f"{x:+.2f}%")
+                            st.dataframe(
+                                df_yr_styled.set_index('Year'),
+                                use_container_width=True
+                            )
+                        
+                    # 몬테카를로 최적화 포트폴리오 추천 카드 (Sharpe Ratio Optimizer)
+                    st.markdown("<br><hr>", unsafe_allow_html=True)
+                    st.markdown("### 🧬 효율적 투자선 (Efficient Frontier) 및 최적의 비중 추천")
+                    st.markdown("현대 포트폴리오 이론(MPT)에 입각하여 리스크(Volatility) 대비 기대 수익률(Sharpe Ratio)을 최대화하는 최적의 자산 배분 비중을 추천해 드립니다.")
+                    
+                    col_opt1, col_opt2 = st.columns(2)
+                    
+                    with col_opt1:
+                        st.markdown('<div class="opt-card">', unsafe_allow_html=True)
+                        st.markdown("##### 🔥 위험 대비 수익 극대화 (Max Sharpe Ratio)")
+                        st.markdown(f"**연평균 기대 수익률:** `{opt_res['max_sharpe']['return']:.2f}%` / **예상 변동성:** `{opt_res['max_sharpe']['volatility']:.2f}%` / **샤프 비율:** `{opt_res['max_sharpe']['sharpe']:.2f}`")
+                        st.markdown("**권장 비중 포트폴리오:**")
+                        for t, w in opt_res['max_sharpe']['weights'].items():
+                            st.write(f"- **{t}**: `{w:.1f}%` 비중")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                    with col_opt2:
+                        st.markdown('<div class="opt-card" style="border-color: #00CC96;">', unsafe_allow_html=True)
+                        st.markdown("##### 🛡️ 포트폴리오 리스크 최소화 (Minimum Volatility)")
+                        st.markdown(f"**연평균 기대 수익률:** `{opt_res['min_vol']['return']:.2f}%` / **예상 변동성:** `{opt_res['min_vol']['volatility']:.2f}%` / **샤프 비율:** `{opt_res['min_vol']['sharpe']:.2f}`")
+                        st.markdown("**권장 비중 포트폴리오:**")
+                        for t, w in opt_res['min_vol']['weights'].items():
+                            st.write(f"- **{t}**: `{w:.1f}%` 비중")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                    # 효율적 투자선 산점도
+                    st.markdown("##### 📊 2,000개 포트폴리오 비중 시뮬레이션 산점도")
+                    sim_data = opt_res['raw_sim']
+                    
+                    scat_fig = go.Figure()
+                    
+                    # 1) 시뮬레이션 도트
+                    scat_fig.add_trace(go.Scatter(
+                        x=sim_data['Volatility'] * 100,
+                        y=sim_data['Return'] * 100,
+                        mode='markers',
+                        marker=dict(
+                            size=5,
+                            color=sim_data['Sharpe'],
+                            colorscale='Viridis',
+                            showscale=True,
+                            colorbar=dict(title="Sharpe Ratio")
+                        ),
+                        name="시뮬레이션 포트폴리오"
+                    ))
+                    
+                    # 2) Max Sharpe 포인트 별표 강조
+                    scat_fig.add_trace(go.Scatter(
+                        x=[opt_res['max_sharpe']['volatility']],
+                        y=[opt_res['max_sharpe']['return']],
+                        mode='markers',
+                        marker=dict(symbol='star', size=15, color='#FF4B4B', line=dict(width=1, color='white')),
+                        name="Max Sharpe"
+                    ))
+                    
+                    # 3) Min Vol 포인트 다이아몬드 강조
+                    scat_fig.add_trace(go.Scatter(
+                        x=[opt_res['min_vol']['volatility']],
+                        y=[opt_res['min_vol']['return']],
+                        mode='markers',
+                        marker=dict(symbol='diamond', size=12, color='#00CC96', line=dict(width=1, color='white')),
+                        name="Min Volatility"
+                    ))
+                    
+                    scat_fig.update_layout(
+                        template="plotly_dark",
+                        height=450,
+                        xaxis_title="리스크 (연간 변동성, %)",
+                        yaxis_title="기대 수익률 (%)",
+                        margin=dict(l=40, r=20, t=20, b=40)
+                    )
+                    st.plotly_chart(scat_fig, use_container_width=True)
 
     # =======================================================
     #                      기존 백테스터 화면
