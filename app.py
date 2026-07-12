@@ -31,6 +31,12 @@ if 'generated_code' not in st.session_state:
 if 'email_verified' not in st.session_state:
     st.session_state['email_verified'] = False
 
+# 무차별 대입 해킹 방어용 로그인 락 상태 추가
+if 'login_attempts' not in st.session_state:
+    st.session_state['login_attempts'] = 0
+if 'lock_until' not in st.session_state:
+    st.session_state['lock_until'] = None
+
 # 커스텀 CSS로 디자인 개선 (유려한 글꼴, 그라데이션 및 카드 스타일, 헤더 감추기)
 st.markdown("""
     <style>
@@ -53,6 +59,19 @@ st.markdown("""
     /* 우측 하단 Manage App 버튼 숨기기 */
     .viewerBadge {
         display: none !important;
+    }
+    
+    /* 사이드바 열기 화살표 버튼을 화면 좌측 상단에 완전 고정(Fixed) */
+    [data-testid="collapsedControl"] {
+        position: fixed !important;
+        top: 12px !important;
+        left: 12px !important;
+        z-index: 999999 !important;
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        border-radius: 8px !important;
+        padding: 4px !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3) !important;
     }
     
     .main-title {
@@ -378,9 +397,20 @@ if not st.session_state['logged_in']:
         with st.container(border=True):
             tab_login, tab_register = st.tabs(["🔐 로그인", "📝 회원가입"])
             
-            # 로그인 탭 (아이디 저장 포함)
+            # 로그인 탭 (무차별 대입 공격 차단 및 아이디 저장 포함)
             with tab_login:
                 st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 2-1) 무차별 대입 잠금 상태 연동 계산
+                is_locked = False
+                remaining_seconds = 0
+                if st.session_state['lock_until'] is not None:
+                    if datetime.now() < st.session_state['lock_until']:
+                        is_locked = True
+                        remaining_seconds = int((st.session_state['lock_until'] - datetime.now()).total_seconds())
+                    else:
+                        st.session_state['lock_until'] = None
+                        st.session_state['login_attempts'] = 0
                 
                 # 저장된 아이디가 URL 매개변수에 존재하면 불러옴 (Remember ID)
                 saved_user_val = st.query_params.get("user", "")
@@ -391,11 +421,18 @@ if not st.session_state['logged_in']:
                 # 아이디 저장 체크박스
                 remember_me = st.checkbox("아이디 저장", value=(saved_user_val != ""), key="remember_me_check")
                 
+                # 잠금 상태일 때 경고 노출
+                if is_locked:
+                    st.error(f"⚠️ 연속 로그인 실패로 로그인이 차단되었습니다. {remaining_seconds}초 후 다시 시도하세요.")
+                
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                if st.button("로그인", use_container_width=True, type="primary"):
+                if st.button("로그인", use_container_width=True, type="primary", disabled=is_locked):
                     if auth.verify_user(login_username, login_password):
-                        # 로그인 성공 시 아이디 저장 처리
+                        # 로그인 성공 시 세션 카운터 리셋 및 아이디 저장 처리
+                        st.session_state['login_attempts'] = 0
+                        st.session_state['lock_until'] = None
+                        
                         if remember_me:
                             st.query_params["user"] = login_username.strip()
                         else:
@@ -406,7 +443,13 @@ if not st.session_state['logged_in']:
                         st.success("로그인에 성공했습니다! 페이지를 로드 중...")
                         st.rerun()
                     else:
-                        st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+                        st.session_state['login_attempts'] += 1
+                        if st.session_state['login_attempts'] >= 5:
+                            st.session_state['lock_until'] = datetime.now() + timedelta(seconds=30)
+                            st.error("⚠️ 연속 5회 로그인 실패로 30초간 로그인이 차단됩니다.")
+                            st.rerun()
+                        else:
+                            st.error(f"아이디 또는 비밀번호가 올바르지 않습니다. (로그인 실패 횟수: {st.session_state['login_attempts']}/5)")
                         
                 # ----------------- 🔑 아이디 / 비밀번호 찾기 -----------------
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -462,11 +505,15 @@ if not st.session_state['logged_in']:
                                 else:
                                     st.error(msg_db)
                         
-            # 회원가입 탭
+            # 회원가입 탭 (강한 유효성 필터 및 이메일 인증)
             with tab_register:
                 st.markdown("<br>", unsafe_allow_html=True)
                 reg_username = st.text_input("새로운 아이디", key="reg_user")
+                st.caption("ℹ️ 아이디는 3~15자의 영문자, 숫자, 언더바(_)만 입력할 수 있습니다.")
+                
                 reg_password = st.text_input("새로운 비밀번호", type="password", key="reg_pass")
+                st.caption("ℹ️ 비밀번호는 최소 8자 이상이며 영문자, 숫자, 특수문자를 혼합해야 합니다.")
+                
                 reg_password_confirm = st.text_input("비밀번호 확인", type="password", key="reg_pass_conf")
                 
                 reg_email = st.text_input("이메일 주소", key="reg_email")
@@ -507,14 +554,24 @@ if not st.session_state['logged_in']:
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 최종 가입 제출 버튼
+                # 최종 가입 제출 버튼 (강력한 유효성 필터 적용)
                 if st.button("회원가입 완료", use_container_width=True, type="primary"):
+                    # 1) 공란 검사
                     if not reg_username.strip() or not reg_password.strip() or not reg_email.strip():
                         st.error("모든 항목을 올바르게 입력해 주세요.")
+                    # 2) 아이디 패턴 검사
+                    elif not auth.is_valid_username(reg_username):
+                        st.error("아이디는 3~15자의 영문자, 숫자, 언더스코어(_)만 허용됩니다. 특수문자나 한글, 띄어쓰기는 포함할 수 없습니다.")
+                    # 3) 비밀번호 강도 검사
+                    elif not auth.is_strong_password(reg_password)[0]:
+                        st.error(auth.is_strong_password(reg_password)[1])
+                    # 4) 비밀번호 일치 확인
                     elif reg_password != reg_password_confirm:
                         st.error("비밀번호와 비밀번호 확인이 서로 일치하지 않습니다.")
+                    # 5) 이메일 인증 완료 확인
                     elif not st.session_state['email_verified']:
                         st.error("이메일 인증을 먼저 완료해 주세요.")
+                    # 6) 가입 처리
                     else:
                         success, msg = auth.register_user(reg_username, reg_password, reg_email)
                         if success:
@@ -618,7 +675,6 @@ else:
                 success, msg = auth.delete_user(user_to_delete)
                 if success:
                     st.success(msg)
-                    # 데이터 갱신을 위해 즉시 리런
                     st.rerun()
                 else:
                     st.error(msg)

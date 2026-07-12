@@ -284,3 +284,31 @@ def delete_user(username):
         return False, f"오류가 발생했습니다: {e}"
     finally:
         conn.close()
+
+import re
+
+def is_valid_username(username):
+    """아이디 유효성 검사: 3~15자의 영문, 숫자, 언더바(_)만 허용"""
+    username = username.strip()
+    if not (3 <= len(username) <= 15):
+        return False
+    pattern = r"^[a-zA-Z0-9_]+$"
+    return bool(re.match(pattern, username))
+
+def is_strong_password(password):
+    """비밀번호 안전성 검사: 최소 8자 이상, 영문/숫자/특수문자 필수 포함"""
+    if len(password) < 8:
+        return False, "비밀번호는 최소 8자 이상이어야 합니다."
+        
+    has_letter = any(c.isalpha() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(c in "!@#$%^&*()_+-=" for c in password)
+    
+    if not has_letter:
+        return False, "비밀번호에 영문자가 최소 1개 이상 포함되어야 합니다."
+    if not has_digit:
+        return False, "비밀번호에 숫자가 최소 1개 이상 포함되어야 합니다."
+    if not has_special:
+        return False, "비밀번호에 특수문자(!@#$%^&*()_+-=)가 최소 1개 이상 포함되어야 합니다."
+        
+    return True, "안전한 비밀번호입니다."
