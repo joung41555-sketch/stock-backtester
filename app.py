@@ -1278,7 +1278,12 @@ else:
                         st.session_state['cash_usd_val'] = float(p["보유 수량"])
                     else:
                         stock_list.append(p)
-                st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                
+                if stock_list:
+                    st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                else:
+                    # 컬럼 스키마 소멸에 따른 data_editor 크래시 원천 방어용 컬럼 강제 보장!
+                    st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
             else:
                 st.session_state['my_portfolio_data'] = pd.DataFrame([
                     {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
@@ -1367,8 +1372,8 @@ else:
             df_valid = df_cleaned.dropna(subset=["티커", "매수 평단가", "보유 수량"])
             df_valid = df_valid[df_valid["티커"].str.strip() != ""]
             
-            if df_valid.empty:
-                st.warning("⚠️ 분석할 보유 자산 정보를 최소 한 종목 이상 입력해 주세요.")
+            if df_valid.empty and cash_krw_input == 0.0 and cash_usd_input == 0.0:
+                st.warning("⚠️ 분석할 보유 자산 정보 또는 현금 잔고를 입력해 주세요.")
             else:
                 with st.spinner("실시간 시장 가격을 야후 파이낸스(yfinance)로부터 수집 중..."):
                     results = []
