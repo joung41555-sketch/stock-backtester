@@ -461,7 +461,8 @@ if not st.session_state['logged_in']:
     st.markdown('<div class="sub-title">SMA(이동평균선) 골든/데드 크로스 전략으로 과거 데이터를 분석하고 투자 성과를 검증하세요.</div>', unsafe_allow_html=True)
 
     st.markdown("<h4 style='text-align: center; color: #94A3B8; margin-bottom: 1.5rem;'>📈 주요 시장지표 & 대표주 실시간 현황</h4>", unsafe_allow_html=True)
-    render_live_dashboard()
+    # 🔧 진단용 임시 비활성화: 무한 재실행(rerun) 루프 원인 확인 중
+    # render_live_dashboard()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
