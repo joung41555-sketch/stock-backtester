@@ -646,3 +646,9 @@ def overwrite_user_portfolio(username, df):
             pass
         finally:
             conn.close()
+
+# 모듈 로드 시점에 데이터베이스 및 admin 자동 프리셋을 1회 강제 실행
+try:
+    init_db()
+except Exception:
+    pass
