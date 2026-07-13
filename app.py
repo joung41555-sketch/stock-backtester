@@ -52,10 +52,23 @@ if not st.session_state['logged_in']:
         if verified_username:
             st.session_state['logged_in'] = True
             st.session_state['username'] = verified_username
-            # DB에서 포트폴리오를 로드하여 세션 프레임 복원
+            # DB에서 포트폴리오를 로드하여 세션 프레임 복원 (현금 분리 가드)
+            st.session_state['cash_krw_val'] = 0.0
+            st.session_state['cash_usd_val'] = 0.0
             db_port = auth.get_user_portfolio(verified_username)
             if db_port:
-                st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
+                stock_list = []
+                for p in db_port:
+                    if p["티커"] == "_CASH_KRW_":
+                        st.session_state['cash_krw_val'] = float(p["보유 수량"])
+                    elif p["티커"] == "_CASH_USD_":
+                        st.session_state['cash_usd_val'] = float(p["보유 수량"])
+                    else:
+                        stock_list.append(p)
+                if stock_list:
+                    st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                else:
+                    st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
 
 # 커스텀 CSS로 디자인 개선 (유려한 글꼴, 그라데이션 및 카드 스타일, 헤더 감추기)
 st.markdown("""
@@ -500,23 +513,45 @@ if not st.session_state['logged_in']:
                     if auth.verify_user(login_username, login_password):
                         token = auth.create_session(login_username)
                         if token:
-                            st.query_params["session_key"] = token
+                            try:
+                                st.query_params["session_key"] = token
+                            except Exception:
+                                pass
                             
                         st.session_state['login_attempts'] = 0
                         st.session_state['lock_until'] = None
                         
                         if remember_me:
-                            st.query_params["user"] = login_username.strip()
+                            try:
+                                st.query_params["user"] = login_username.strip()
+                            except Exception:
+                                pass
                         else:
-                            st.query_params.pop("user", None)
+                            try:
+                                st.query_params.pop("user", None)
+                            except Exception:
+                                pass
                             
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = login_username
                         
-                        # DB에서 저장되어 있던 개인 보유 자산 포트폴리오 로딩 복원
+                        # DB에서 저장되어 있던 개인 보유 자산 포트폴리오 로딩 복원 (현금 분리 가드)
+                        st.session_state['cash_krw_val'] = 0.0
+                        st.session_state['cash_usd_val'] = 0.0
                         db_port = auth.get_user_portfolio(login_username)
                         if db_port:
-                            st.session_state['my_portfolio_data'] = pd.DataFrame(db_port)
+                            stock_list = []
+                            for p in db_port:
+                                if p["티커"] == "_CASH_KRW_":
+                                    st.session_state['cash_krw_val'] = float(p["보유 수량"])
+                                elif p["티커"] == "_CASH_USD_":
+                                    st.session_state['cash_usd_val'] = float(p["보유 수량"])
+                                else:
+                                    stock_list.append(p)
+                            if stock_list:
+                                st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                            else:
+                                st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
                             
                         st.success("로그인에 성공했습니다! 페이지를 로드 중...")
                         st.rerun()
@@ -660,7 +695,10 @@ else:
         current_token = st.query_params.get("session_key", "")
         if current_token:
             auth.destroy_session(current_token)
-            st.query_params.pop("session_key", None)
+            try:
+                st.query_params.pop("session_key", None)
+            except Exception:
+                pass
             
         st.session_state['logged_in'] = False
         st.session_state['username'] = ""
