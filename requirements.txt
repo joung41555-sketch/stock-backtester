@@ -1,8 +1,6 @@
 streamlit
 yfinance
 pandas
-numpy
+numpy==1.26.4
 plotly
 supabase
-
-# force clean rebuild cache trigger 2026-07-13 14:10
