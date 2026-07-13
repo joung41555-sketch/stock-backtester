@@ -203,6 +203,57 @@ def send_verification_email(to_email, code):
     """
     return dispatch_email(to_email, "[Dynamic Stock Backtester] 회원가입 이메일 인증번호", html_body, code)
 
+
+def check_username_exists(username):
+    """아이디 중복 여부를 대소문자 무관하게 검사 (존재하면 True, 없으면 False)"""
+    username = username.strip()
+    if not username:
+        return True
+    if username.lower() == "admin":
+        return True
+        
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username").ilike("username", username).execute()
+            return len(res.data) > 0
+        except Exception:
+            return True
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+            return cursor.fetchone() is not None
+        except Exception:
+            return True
+        finally:
+            conn.close()
+
+def check_email_exists(email):
+    """이메일 중복 여부를 대소문자 무관하게 검사 (존재하면 True, 없으면 False)"""
+    email = email.strip()
+    if not email:
+        return True
+        
+    if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("email").ilike("email", email).execute()
+            return len(res.data) > 0
+        except Exception:
+            return True
+    else:
+        init_db()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT email FROM users WHERE LOWER(email) = LOWER(?)", (email,))
+            return cursor.fetchone() is not None
+        except Exception:
+            return True
+        finally:
+            conn.close()
+
 def register_user(username, password, email):
     """신규 회원가입 처리 (이메일 추가, Supabase/SQLite 하이브리드 지원)"""
     username = username.strip()

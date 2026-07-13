@@ -403,8 +403,12 @@ def render_live_dashboard():
     for i, stock in enumerate(indices):
         col = cols[i]
         
-        # 외부 통신(yfinance)을 로그인 대기 화면에서 100% 차단하여 무한 로딩 원천 해결
-        stock_data = get_fallback_spark_data(stock['ticker'])
+        # 1순위: 야후 파이낸스 실시간 시세 시도 (30분 캐시 및 2초 타임아웃 제한 적용)
+        stock_data = load_sparkline_data(stock['ticker'])
+        
+        # 2순위 (Fallback): 외부 네트워크 지연/차단 시 로컬 모사 데이터로 스위칭
+        if stock_data is None or stock_data.empty:
+            stock_data = get_fallback_spark_data(stock['ticker'])
             
         close_prices = stock_data['Close'].values.flatten()
         curr_price = float(close_prices[-1])
@@ -635,6 +639,44 @@ if not st.session_state['logged_in']:
                 reg_username = st.text_input("새로운 아이디", key="reg_user")
                 st.caption("ℹ️ 아이디는 3~15자의 영문자, 숫자, 언더바(_)만 입력할 수 있습니다.")
                 
+                # 🔍 아이디 중복 확인 버튼 및 상태 표시
+                if 'id_verified' not in st.session_state:
+                    st.session_state['id_verified'] = ""
+                
+                col_id_chk, col_id_status = st.columns([1.5, 2])
+                with col_id_chk:
+                    id_chk_btn = st.button("🔍 아이디 중복 확인", use_container_width=True)
+                
+                is_id_checked = (st.session_state['id_verified'] == reg_username.strip()) and (reg_username.strip() != "")
+                
+                with col_id_status:
+                    if id_chk_btn:
+                        username_stripped = reg_username.strip()
+                        if not username_stripped:
+                            st.error("아이디를 입력해 주세요.")
+                            st.session_state['id_verified'] = ""
+                        elif not auth.is_valid_username(username_stripped):
+                            st.error("3~15자 영문/숫자/_ 만 가능합니다.")
+                            st.session_state['id_verified'] = ""
+                        elif username_stripped.lower() == "admin":
+                            st.error("사용 불가능한 관리자 아이디입니다.")
+                            st.session_state['id_verified'] = ""
+                        else:
+                            exists = auth.check_username_exists(username_stripped)
+                            if exists:
+                                st.error("이미 존재하는 아이디입니다.")
+                                st.session_state['id_verified'] = ""
+                            else:
+                                st.success("사용 가능한 아이디입니다!")
+                                st.session_state['id_verified'] = username_stripped
+                                st.rerun()
+                    else:
+                        if is_id_checked:
+                            st.markdown("<p style='color: #10B981; font-weight: 600; font-size: 0.9rem; margin-top: 0.5rem;'>✓ 아이디 중복 확인 완료</p>", unsafe_allow_html=True)
+                        elif reg_username.strip() != "":
+                            st.markdown("<p style='color: #FF4B4B; font-weight: 600; font-size: 0.9rem; margin-top: 0.5rem;'>⚠️ 중복 확인이 필요합니다.</p>", unsafe_allow_html=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
                 reg_password = st.text_input("새로운 비밀번호", type="password", key="reg_pass")
                 st.caption("ℹ️ 비밀번호는 최소 8자 이상이며 영문자, 숫자, 특수문자를 혼합해야 합니다.")
                 
@@ -647,19 +689,31 @@ if not st.session_state['logged_in']:
                     send_btn = st.button("✉️ 인증 코드 전송", use_container_width=True)
                 
                 if send_btn:
-                    if not reg_email.strip():
+                    username_stripped = reg_username.strip()
+                    email_stripped = reg_email.strip()
+                    
+                    if not username_stripped:
+                        st.error("아이디를 먼저 입력해 주세요.")
+                    elif st.session_state['id_verified'] != username_stripped:
+                        st.error("아이디 중복 확인을 먼저 완료해 주세요.")
+                    elif not email_stripped:
                         st.error("이메일 주소를 입력해 주세요.")
                     else:
-                        code = f"{random.randint(100000, 999999)}"
-                        st.session_state['generated_code'] = code
-                        st.session_state['code_sent'] = True
-                        st.session_state['email_verified'] = False
-                        
-                        success, msg = auth.send_verification_email(reg_email, code)
-                        if success:
-                            st.success(msg)
+                        # 이메일 중복 체크 선제 집행!
+                        email_exists = auth.check_email_exists(email_stripped)
+                        if email_exists:
+                            st.error("이미 가입된 이메일 주소입니다. 다른 이메일을 입력해 주세요.")
                         else:
-                            st.info(msg)
+                            code = f"{random.randint(100000, 999999)}"
+                            st.session_state['generated_code'] = code
+                            st.session_state['code_sent'] = True
+                            st.session_state['email_verified'] = False
+                            
+                            success, msg = auth.send_verification_email(email_stripped, code)
+                            if success:
+                                st.success(msg)
+                            else:
+                                st.info(msg)
                             
                 if st.session_state['code_sent'] and not st.session_state['email_verified']:
                     user_code = st.text_input("6자리 인증번호 입력", key="verification_code")
@@ -679,6 +733,8 @@ if not st.session_state['logged_in']:
                 if st.button("회원가입 완료", use_container_width=True, type="primary"):
                     if not reg_username.strip() or not reg_password.strip() or not reg_email.strip():
                         st.error("모든 항목을 올바르게 입력해 주세요.")
+                    elif st.session_state['id_verified'] != reg_username.strip():
+                        st.error("아이디 중복 확인을 먼저 완료해 주세요.")
                     elif not auth.is_valid_username(reg_username):
                         st.error("아이디는 3~15자의 영문자, 숫자, 언더스코어(_)만 허용됩니다.")
                     elif not auth.is_strong_password(reg_password)[0]:
@@ -691,6 +747,7 @@ if not st.session_state['logged_in']:
                         success, msg = auth.register_user(reg_username, reg_password, reg_email)
                         if success:
                             st.success(msg)
+                            st.session_state['id_verified'] = ""
                             st.session_state['code_sent'] = False
                             st.session_state['generated_code'] = ""
                             st.session_state['email_verified'] = False
@@ -1365,8 +1422,8 @@ else:
             use_container_width=True,
             column_config={
                 "티커": st.column_config.TextColumn("주식 티커 (예: AAPL)", width="medium", required=True),
-                "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, step=0.01, format="%.2f", required=True),
-                "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, step=0.01, format="%.2f", required=True)
+                "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, step=0.0001, format="%.4f", required=True),
+                "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, step=0.0001, format="%.4f", required=True)
             },
             key="portfolio_editor",
             on_change=sync_editor_data  # 실시간 상태 보존 콜백 엔진 연동!
@@ -1591,10 +1648,10 @@ else:
                                 <div class="spark-card" style="border-left: 5px solid {color_card};">
                                     <div style="font-size: 1.1rem; font-weight: 800; color: #F8FAFC;">{row['티커']}</div>
                                     <div style="font-size: 0.8rem; color: #94A3B8; margin-top: 0.2rem;">
-                                        평단: {row['평단가']:,.2f} / 현재가: {row['현재가']:,.2f}
+                                        평단: {row['평단가']:,.4f} / 현재가: {row['현재가']:,.4f}
                                     </div>
                                     <hr style="border: 0; border-top: 1px solid #334155; margin: 8px 0;">
-                                    <div style="font-size: 0.85rem; color: #94A3B8;">보유량: {row['보유수량']:.1f} 주</div>
+                                    <div style="font-size: 0.85rem; color: #94A3B8;">보유량: {row['보유수량']:.4f} 주</div>
                                     <div style="font-size: 0.85rem; color: #94A3B8;">평가액: {row['평가금액']:,.2f}</div>
                                     <div style="font-size: 1.1rem; font-weight: 700; color: {color_card}; margin-top: 0.4rem;">
                                         {arrow_card} {sign_card}{row['평가손익']:,.2f} ({sign_card}{row['수익률']:.2f}%)
