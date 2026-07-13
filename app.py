@@ -1994,8 +1994,7 @@ else:
     #            🚨 시장 위험 지표 모니터링 대시보드
     # =======================================================
     elif admin_mode == "🚨 시장 위험 지표":
-        # 프래그먼트 함수를 정의하여 15초마다 라이브 갱신 처리
-        @st.fragment(run_every=15)
+        # 시장 위험 지표 대시보드 렌더링 함수
         def render_market_risk_dashboard_live():
             st.markdown('<h1 style="font-weight: 800; background: linear-gradient(90deg, #FF4B4B 0%, #FF8F8F 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">🚨 시장 종합 위험 지표 모니터링</h1>', unsafe_allow_html=True)
             st.markdown('<p style="color: #888888; font-size: 1.1rem; margin-bottom: 2rem;">금융 위기와 경기 침체 신호를 선제적으로 모니터링하는 실시간 거시 경제 센티먼트 대시보드</p>', unsafe_allow_html=True)
@@ -2008,7 +2007,7 @@ else:
                 # ⏰ UTC+9 한국 시각으로 강제 타임존 오프셋 보정
                 kst_now = datetime.utcnow() + timedelta(hours=9)
                 now_str = kst_now.strftime("%H:%M:%S")
-                st.markdown(f"<p style='color: #888888; font-size: 0.9rem; margin-top: 0.4rem;'>⏰ 최근 실시간 갱신 시각 (한국 시각 KST): <b>{now_str}</b> (15초 주기로 자동 새로고침 중)</p>", unsafe_allow_html=True)
+                st.markdown(f"<p style='color: #888888; font-size: 0.9rem; margin-top: 0.4rem;'>⏰ 최근 실시간 갱신 시각 (한국 시각 KST): <b>{now_str}</b> (강제 갱신 버튼을 눌러 실시간 업데이트가 가능합니다)</p>", unsafe_allow_html=True)
                 
             with st.spinner("글로벌 거시 경제 및 풋/콜 옵션 실시간 수치 다운로드 및 분석 중..."):
                 tickers_to_load = ["^VIX", "^W5000", "^TNX", "^IRX", "HYG", "IEF", "USDKRW=X"]
