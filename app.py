@@ -204,6 +204,8 @@ def load_sparkline_data(ticker):
     except Exception:
         return None
 
+
+
 # ----------------- 미니 스파크라인 그래프 생성 -----------------
 def get_live_cnn_data():
     """
@@ -744,6 +746,7 @@ else:
                             st.session_state['portfolio_tickers'] = ", ".join(current_list)
                             st.success(f"{pure_symbol}이(가) 포트폴리오 쉼표 목록에 추가되었습니다!")
                             st.rerun()
+
 
     # =======================================================
     #                      관리자 전용 대시보드 화면
@@ -1579,7 +1582,6 @@ else:
                                 </div>
                             """, unsafe_allow_html=True)
                             
-                        st.markdown("<br>", unsafe_allow_html=True)
                         c_div1, c_div2 = st.columns([1.2, 1.8])
                         
                         with c_div1:
