@@ -66,9 +66,15 @@ if not st.session_state['logged_in']:
                     else:
                         stock_list.append(p)
                 if stock_list:
-                    st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                    df_temp = pd.DataFrame(stock_list)
+                    df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                    df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                    st.session_state['my_portfolio_data'] = df_temp
                 else:
-                    st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                    df_temp = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                    df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                    df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                    st.session_state['my_portfolio_data'] = df_temp
 
 # 커스텀 CSS로 디자인 개선 (유려한 글꼴, 그라데이션 및 카드 스타일, 헤더 감추기)
 st.markdown("""
@@ -550,9 +556,15 @@ if not st.session_state['logged_in']:
                                 else:
                                     stock_list.append(p)
                             if stock_list:
-                                st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                                df_temp = pd.DataFrame(stock_list)
+                                df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                                df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                                st.session_state['my_portfolio_data'] = df_temp
                             else:
-                                st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                                df_temp = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                                df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                                df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                                st.session_state['my_portfolio_data'] = df_temp
                             
                         st.success("로그인에 성공했습니다! 페이지를 로드 중...")
                         st.rerun()
@@ -1320,16 +1332,25 @@ else:
                         stock_list.append(p)
                 
                 if stock_list:
-                    st.session_state['my_portfolio_data'] = pd.DataFrame(stock_list)
+                    df_temp = pd.DataFrame(stock_list)
+                    df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                    df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                    st.session_state['my_portfolio_data'] = df_temp
                 else:
                     # 컬럼 스키마 소멸에 따른 data_editor 크래시 원천 방어용 컬럼 강제 보장!
-                    st.session_state['my_portfolio_data'] = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                    df_temp = pd.DataFrame(columns=["티커", "매수 평단가", "보유 수량"])
+                    df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                    df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                    st.session_state['my_portfolio_data'] = df_temp
             else:
-                st.session_state['my_portfolio_data'] = pd.DataFrame([
+                df_temp = pd.DataFrame([
                     {"티커": "AAPL", "매수 평단가": 170.0, "보유 수량": 10.0},
                     {"티커": "NVDA", "매수 평단가": 100.0, "보유 수량": 25.0},
                     {"티커": "TSLA", "매수 평단가": 240.0, "보유 수량": 5.0}
                 ])
+                df_temp["매수 평단가"] = df_temp["매수 평단가"].astype(float)
+                df_temp["보유 수량"] = df_temp["보유 수량"].astype(float)
+                st.session_state['my_portfolio_data'] = df_temp
         
         # 세션 리셋 방지용 현금 변수 바인딩
         if 'cash_krw_val' not in st.session_state:
@@ -1344,8 +1365,8 @@ else:
             use_container_width=True,
             column_config={
                 "티커": st.column_config.TextColumn("주식 티커 (예: AAPL)", width="medium", required=True),
-                "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, format="%.2f", required=True),
-                "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, format="%.2f", required=True)
+                "매수 평단가": st.column_config.NumberColumn("매수 평단가 ($ 또는 ₩)", min_value=0.0, step=0.01, format="%.2f", required=True),
+                "보유 수량": st.column_config.NumberColumn("보유 주식 수 (주)", min_value=0.0, step=0.01, format="%.2f", required=True)
             },
             key="portfolio_editor",
             on_change=sync_editor_data  # 실시간 상태 보존 콜백 엔진 연동!
