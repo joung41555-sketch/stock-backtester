@@ -354,8 +354,9 @@ def calculate_metrics(data, initial_capital, benchmark_data=None):
 # ----------------- 로그인 전 전용: 실시간 주가 순환 컴포넌트 (st.fragment) -----------------
 @st.fragment(run_every=30)
 def render_live_dashboard():
-    tabs = st.tabs(["🚀 M7 성장주", "💾 반도체 핵심주", "⚡ 플랫폼 & 전기차", "🌍 글로벌 대표 지수"])
-    
+    if 'dash_index' not in st.session_state:
+        st.session_state['dash_index'] = 0
+        
     dashboard_stocks_groups = [
         # 그룹 1: 미 기술 자이언트 (M7 일부)
         [
@@ -375,57 +376,78 @@ def render_live_dashboard():
             {"name": "Alphabet (GOOGL)", "ticker": "GOOGL", "currency": "$"},
             {"name": "Meta (META)", "ticker": "META", "currency": "$"}
         ],
-        # 그룹 4: 글로벌 주요국 대표 시장 지수 (pt 단위) - 코스피, 나스닥, S&P 500 깔끔 매핑
+        # 그룹 4: 글로벌 주요국 대표 시장 지수 (pt 단위) - 코스피, 나스닥, S&P 500 (수치 앞 pt 제거)
         [
-            {"name": "코스피", "ticker": "^KS11", "currency": "pt "},
-            {"name": "나스닥", "ticker": "^IXIC", "currency": "pt "},
-            {"name": "S&P 500", "ticker": "^GSPC", "currency": "pt "}
+            {"name": "코스피", "ticker": "^KS11", "currency": ""},
+            {"name": "나스닥", "ticker": "^IXIC", "currency": ""},
+            {"name": "S&P 500", "ticker": "^GSPC", "currency": ""}
         ]
     ]
     
-    for g_idx, tab in enumerate(tabs):
-        with tab:
-            current_group = dashboard_stocks_groups[g_idx]
-            col_a, col_b, col_c = st.columns(3)
-            cols = [col_a, col_b, col_c]
+    current_group = dashboard_stocks_groups[st.session_state['dash_index']]
+    
+    col_a, col_b, col_c = st.columns(3)
+    cols = [col_a, col_b, col_c]
+    
+    clicked_graph = False
+    
+    for i, stock in enumerate(current_group):
+        col = cols[i]
+        stock_data = load_sparkline_data(stock['ticker'])
+        
+        if stock_data is not None and len(stock_data) >= 2:
+            close_prices = stock_data['Close'].values.flatten()
+            curr_price = float(close_prices[-1])
+            prev_price = float(close_prices[-2])
             
-            for i, stock in enumerate(current_group):
-                col = cols[i]
-                stock_data = load_sparkline_data(stock['ticker'])
-                
-                if stock_data is not None and len(stock_data) >= 2:
-                    close_prices = stock_data['Close'].values.flatten()
-                    curr_price = float(close_prices[-1])
-                    prev_price = float(close_prices[-2])
-                    
-                    change_val = curr_price - prev_price
-                    change_pct = (change_val / prev_price) * 100
-                    is_positive = change_val >= 0
-                    color_hex = "#10B981" if is_positive else "#EF4444"
-                    sign = "+" if is_positive else ""
-                    arrow = "▲" if is_positive else "▼"
-                    
-                    col.markdown(f"""
-                        <div class="spark-card">
-                            <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}</div>
-                            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.4rem; margin-bottom: 0.2rem;">
-                                <span style="font-size: 1.6rem; font-weight: 700; color: #F8FAFC;">{stock['currency']}{curr_price:,.2f}</span>
-                                <span style="font-size: 0.9rem; font-weight: 600; color: {color_hex};">
-                                    {arrow} {sign}{change_pct:.2f}%
-                                </span>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    fig = draw_sparkline(stock_data, is_positive)
-                    col.plotly_chart(
-                        fig, 
-                        use_container_width=True, 
-                        config={'displayModeBar': False}, 
-                        key=f"spark_{stock['ticker']}_tab_{g_idx}"
-                    )
-                else:
-                    col.info(f"{stock['name']} 데이터를 불러올 수 없습니다.")
+            change_val = curr_price - prev_price
+            change_pct = (change_val / prev_price) * 100
+            is_positive = change_val >= 0
+            color_hex = "#10B981" if is_positive else "#EF4444"
+            sign = "+" if is_positive else ""
+            arrow = "▲" if is_positive else "▼"
+            
+            col.markdown(f"""
+                <div class="spark-card">
+                    <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}</div>
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.4rem; margin-bottom: 0.2rem;">
+                        <span style="font-size: 1.6rem; font-weight: 700; color: #F8FAFC;">{stock['currency']}{curr_price:,.2f}</span>
+                        <span style="font-size: 0.9rem; font-weight: 600; color: {color_hex};">
+                            {arrow} {sign}{change_pct:.2f}%
+                        </span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            fig = draw_sparkline(stock_data, is_positive)
+            
+            # 그래프 클릭 인터랙티브 감지
+            try:
+                select_event = col.plotly_chart(
+                    fig, 
+                    use_container_width=True, 
+                    config={'displayModeBar': False}, 
+                    key=f"spark_chart_{stock['ticker']}_{st.session_state['dash_index']}",
+                    on_select="rerun"
+                )
+                if select_event and (select_event.get('selection') or len(select_event.get('points', [])) > 0):
+                    clicked_graph = True
+            except TypeError:
+                col.plotly_chart(
+                    fig, 
+                    use_container_width=True, 
+                    config={'displayModeBar': False}, 
+                    key=f"spark_chart_{stock['ticker']}_{st.session_state['dash_index']}"
+                )
+        else:
+            col.info(f"{stock['name']} 데이터를 불러올 수 없습니다.")
+            
+    st.markdown("<div style='margin-top: -0.5rem;'></div>", unsafe_allow_html=True)
+    next_btn = st.button("🔄 다음 시장 지표 보기 (그래프 사진이나 여기를 클릭하세요)", use_container_width=True)
+    
+    if clicked_graph or next_btn:
+        st.session_state['dash_index'] = (st.session_state['dash_index'] + 1) % len(dashboard_stocks_groups)
+        st.rerun()
 
 # ----------------- 🛠️ 실시간 데이터 에디터 유실 종결 콜백 -----------------
 def sync_editor_data():
