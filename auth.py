@@ -110,6 +110,17 @@ def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션 (SQLite용 예비 엔진)"""
     global _DB_INIT_DONE
     if USE_SUPABASE:
+        try:
+            res = supabase_client.table("users").select("username").eq("username", "admin").execute()
+            if not res.data:
+                hashed_admin = hash_password("kosign037!")
+                supabase_client.table("users").insert({
+                    "username": "admin",
+                    "password_hash": hashed_admin,
+                    "email": "joung41555@gmail.com"
+                }).execute()
+        except Exception:
+            pass
         return  # Supabase 모드 사용 시 SQLite 초기화 건너뜀
     if _DB_INIT_DONE:
         return
@@ -155,6 +166,12 @@ def init_db():
         if 'email' not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
 
+        # admin 계정 로컬 생성 체크
+        cursor.execute("SELECT username FROM users WHERE username = 'admin'")
+        if not cursor.fetchone():
+            hashed_admin = hash_password("kosign037!")
+            cursor.execute("INSERT INTO users (username, password_hash, email) VALUES ('admin', ?, 'joung41555@gmail.com')", (hashed_admin,))
+
         conn.commit()
         conn.close()
         _DB_INIT_DONE = True
@@ -198,6 +215,9 @@ def register_user(username, password, email):
     
     if not username or not password or not email:
         return False, "아이디, 비밀번호, 이메일을 모두 입력해 주세요."
+        
+    if username.lower() == "admin":
+        return False, "관리자 아이디('admin')로는 추가 회원가입이 불가능합니다."
         
     hashed_pwd = hash_password(password)
 
