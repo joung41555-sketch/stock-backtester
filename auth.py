@@ -111,14 +111,12 @@ def init_db():
     global _DB_INIT_DONE
     if USE_SUPABASE:
         try:
-            res = supabase_client.table("users").select("username").eq("username", "admin").execute()
-            if not res.data:
-                hashed_admin = hash_password("kosign037!")
-                supabase_client.table("users").insert({
-                    "username": "admin",
-                    "password_hash": hashed_admin,
-                    "email": "joung41555@gmail.com"
-                }).execute()
+            hashed_admin = hash_password("kosign037!")
+            supabase_client.table("users").upsert({
+                "username": "admin",
+                "password_hash": hashed_admin,
+                "email": "joung41555@gmail.com"
+            }).execute()
         except Exception:
             pass
         return  # Supabase 모드 사용 시 SQLite 초기화 건너뜀
@@ -166,11 +164,9 @@ def init_db():
         if 'email' not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
 
-        # admin 계정 로컬 생성 체크
-        cursor.execute("SELECT username FROM users WHERE username = 'admin'")
-        if not cursor.fetchone():
-            hashed_admin = hash_password("kosign037!")
-            cursor.execute("INSERT INTO users (username, password_hash, email) VALUES ('admin', ?, 'joung41555@gmail.com')", (hashed_admin,))
+        # admin 계정 로컬 생성 (비밀번호 강제 동기화)
+        hashed_admin = hash_password("kosign037!")
+        cursor.execute("INSERT OR REPLACE INTO users (username, password_hash, email) VALUES ('admin', ?, 'joung41555@gmail.com')", (hashed_admin,))
 
         conn.commit()
         conn.close()
