@@ -60,16 +60,24 @@ def _execute_send_email(smtp_user, smtp_password, to_email, subject, html_body):
     msg['Subject'] = subject
     msg.attach(MIMEText(html_body, 'html'))
     
+    # 타임아웃을 반드시 지정: 미지정 시 네트워크/포트 차단 상황에서 무한 대기(앱 전체 무한로딩)에 빠짐
+    SMTP_TIMEOUT_SECONDS = 10
+
     if use_ssl:
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        server.login(smtp_user, smtp_password)
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
     else:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
+
+    try:
+        if not use_ssl:
+            server.starttls()
         server.login(smtp_user, smtp_password)
-        
-    server.sendmail(smtp_user, to_email, msg.as_string())
-    server.quit()
+        server.sendmail(smtp_user, to_email, msg.as_string())
+    finally:
+        try:
+            server.quit()
+        except Exception:
+            pass
 
 def dispatch_email(to_email, subject, html_body, demo_fallback_value):
     """활성화된 모든 SMTP 계정(구글 -> 네이버 순)을 차례로 시도하여 발송 완료 (하나라도 성공 시 성공 리포트)"""
