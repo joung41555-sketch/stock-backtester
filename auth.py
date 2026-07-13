@@ -219,10 +219,15 @@ def register_user(username, password, email):
 
     if USE_SUPABASE:
         try:
-            # ID 중복 확인
-            res = supabase_client.table("users").select("username").eq("username", username).execute()
+            # 1. ID 중복 확인 (대소문자 무관)
+            res = supabase_client.table("users").select("username").ilike("username", username).execute()
             if res.data:
                 return False, "이미 존재하는 아이디입니다."
+            
+            # 2. 이메일 중복 확인 (대소문자 무관)
+            res_email = supabase_client.table("users").select("email").ilike("email", email).execute()
+            if res_email.data:
+                return False, "이미 등록된 이메일 주소입니다."
             
             # 신규 삽입
             supabase_client.table("users").insert({
@@ -238,9 +243,15 @@ def register_user(username, password, email):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+            # 1. ID 중복 확인 (대소문자 무관)
+            cursor.execute("SELECT username FROM users WHERE LOWER(username) = LOWER(?)", (username,))
             if cursor.fetchone():
                 return False, "이미 존재하는 아이디입니다."
+            
+            # 2. 이메일 중복 확인 (대소문자 무관)
+            cursor.execute("SELECT email FROM users WHERE LOWER(email) = LOWER(?)", (email,))
+            if cursor.fetchone():
+                return False, "이미 등록된 이메일 주소입니다."
             
             cursor.execute("INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)", (username, hashed_pwd, email))
             conn.commit()
