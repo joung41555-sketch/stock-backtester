@@ -355,39 +355,66 @@ def calculate_metrics(data, initial_capital, benchmark_data=None):
 # ----------------- 로그인 전 전용: 실시간 주가 순환 컴포넌트 (st.fragment) -----------------
 @st.fragment(run_every=30)
 def render_live_dashboard():
-    # 3대 핵심 시장 지수 단독 고정으로 로딩 패킷 최소화 (코스피, 나스닥, S&P 500)
-    indices = [
-        {"name": "코스피", "ticker": "^KS11", "currency": ""},
-        {"name": "나스닥", "ticker": "^IXIC", "currency": ""},
-        {"name": "S&P 500", "ticker": "^GSPC", "currency": ""}
+    if 'dash_index' not in st.session_state:
+        st.session_state['dash_index'] = 0
+        
+    dashboard_stocks_groups = [
+        # 그룹 1: M7 성장주
+        [
+            {"name": "Apple (AAPL)", "ticker": "AAPL", "currency": "$"},
+            {"name": "Nvidia (NVDA)", "ticker": "NVDA", "currency": "$"},
+            {"name": "Microsoft (MSFT)", "ticker": "MSFT", "currency": "$"}
+        ],
+        # 그룹 2: 반도체 핵심주
+        [
+            {"name": "삼성전자", "ticker": "005930.KS", "currency": "₩"},
+            {"name": "SK하이닉스", "ticker": "000660.KS", "currency": "₩"},
+            {"name": "TSMC (TSM)", "ticker": "TSM", "currency": "$"}
+        ],
+        # 그룹 3: 플랫폼 & 전기차
+        [
+            {"name": "Tesla (TSLA)", "ticker": "TSLA", "currency": "$"},
+            {"name": "Alphabet (GOOGL)", "ticker": "GOOGL", "currency": "$"},
+            {"name": "Meta (META)", "ticker": "META", "currency": "$"}
+        ],
+        # 그룹 4: 글로벌 주요 지수 (코스피, 나스닥, S&P 500) - 수치 앞 pt 제거
+        [
+            {"name": "코스피", "ticker": "^KS11", "currency": ""},
+            {"name": "나스닥", "ticker": "^IXIC", "currency": ""},
+            {"name": "S&P 500", "ticker": "^GSPC", "currency": ""}
+        ]
     ]
+    
+    current_group = dashboard_stocks_groups[st.session_state['dash_index']]
     
     col_a, col_b, col_c = st.columns(3)
     cols = [col_a, col_b, col_c]
     
-    # 야후 파이낸스 차단 또는 로딩 렉 대비 가상 5일 주가 데이터 생성기 (Fallback)
+    clicked_graph = False
+    
+    # 야후 파이낸스 차단 또는 로딩 렉 대비 전 종목 가상 5일 주가 데이터 생성기 (Fallback)
     def get_fallback_spark_data(ticker):
         dates = [datetime.now() - timedelta(days=i) for i in range(5)]
         dates.reverse()
-        if ticker == "^KS11":
-            base_val = 2635.80
-        elif ticker == "^IXIC":
-            base_val = 18120.45
-        else:
-            base_val = 5410.20
-        # 모사 노이즈 추가
+        
+        base_prices = {
+            "AAPL": 220.50, "NVDA": 128.40, "MSFT": 415.20,
+            "005930.KS": 74500.0, "000660.KS": 185400.0, "TSM": 174.50,
+            "TSLA": 248.30, "GOOGL": 182.40, "META": 498.50,
+            "^KS11": 2635.80, "^IXIC": 18120.45, "^GSPC": 5410.20
+        }
+        base_val = base_prices.get(ticker, 100.0)
         prices = [base_val * (1 + 0.0035 * i + (0.002 * (i % 2 - 1))) for i in range(5)]
         df = pd.DataFrame({"Close": prices}, index=dates)
         return df
 
-    for i, stock in enumerate(indices):
+    for i, stock in enumerate(current_group):
         col = cols[i]
         
-        # yfinance 다운로드 시도 (timeout=1.2초로 무한 로딩 차단)
+        # yfinance 다운로드 시도 (timeout=1.0초로 제한해 렉 방지)
         stock_data = load_sparkline_data(stock['ticker'])
         is_fallback = False
         
-        # yfinance 실패 시 즉시 Mock 데이터로 대체 (로딩 속도 보장)
         if stock_data is None or len(stock_data) < 2:
             stock_data = get_fallback_spark_data(stock['ticker'])
             is_fallback = True
@@ -418,12 +445,32 @@ def render_live_dashboard():
         """, unsafe_allow_html=True)
         
         fig = draw_sparkline(stock_data, is_positive)
-        col.plotly_chart(
-            fig, 
-            use_container_width=True, 
-            config={'displayModeBar': False}, 
-            key=f"spark_chart_locked_{stock['ticker']}"
-        )
+        
+        # 그래프 클릭 인터랙티브 감지
+        try:
+            select_event = col.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                config={'displayModeBar': False}, 
+                key=f"spark_chart_rot_{stock['ticker']}_{st.session_state['dash_index']}",
+                on_select="rerun"
+            )
+            if select_event and (select_event.get('selection') or len(select_event.get('points', [])) > 0):
+                clicked_graph = True
+        except TypeError:
+            col.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                config={'displayModeBar': False}, 
+                key=f"spark_chart_rot_{stock['ticker']}_{st.session_state['dash_index']}"
+            )
+            
+    st.markdown("<div style='margin-top: -0.5rem;'></div>", unsafe_allow_html=True)
+    next_btn = st.button("🔄 다음 시장 지표 보기 (그래프 사진이나 여기를 클릭하세요)", use_container_width=True)
+    
+    if clicked_graph or next_btn:
+        st.session_state['dash_index'] = (st.session_state['dash_index'] + 1) % len(dashboard_stocks_groups)
+        st.rerun()
 
 # ----------------- 🛠️ 실시간 데이터 에디터 유실 종결 콜백 -----------------
 def sync_editor_data():
