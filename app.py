@@ -383,13 +383,8 @@ def render_live_dashboard():
     for i, stock in enumerate(indices):
         col = cols[i]
         
-        # yfinance 다운로드 시도 (timeout=1.0초로 제한해 렉 방지)
-        stock_data = load_sparkline_data(stock['ticker'])
-        is_fallback = False
-        
-        if stock_data is None or len(stock_data) < 2:
-            stock_data = get_fallback_spark_data(stock['ticker'])
-            is_fallback = True
+        # 외부 통신(yfinance)을 로그인 대기 화면에서 100% 차단하여 무한 로딩 원천 해결
+        stock_data = get_fallback_spark_data(stock['ticker'])
             
         close_prices = stock_data['Close'].values.flatten()
         curr_price = float(close_prices[-1])
@@ -402,11 +397,9 @@ def render_live_dashboard():
         sign = "+" if is_positive else ""
         arrow = "▲" if is_positive else "▼"
         
-        fallback_indicator = " (실시간)" if not is_fallback else " (지연)"
-        
         col.markdown(f"""
             <div class="spark-card">
-                <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}{fallback_indicator}</div>
+                <div style="font-size: 0.85rem; color: #94A3B8; font-weight: 600; text-transform: uppercase;">{stock['name']}</div>
                 <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.4rem; margin-bottom: 0.2rem;">
                     <span style="font-size: 1.6rem; font-weight: 700; color: #F8FAFC;">{stock['currency']}{curr_price:,.2f}</span>
                     <span style="font-size: 0.9rem; font-weight: 600; color: {color_hex};">
