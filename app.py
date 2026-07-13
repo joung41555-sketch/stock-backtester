@@ -367,8 +367,7 @@ def calculate_metrics(data, initial_capital, benchmark_data=None):
         "trade_count": trade_count
     }
 
-# ----------------- 로그인 전 전용: 실시간 주가 순환 컴포넌트 (st.fragment) -----------------
-@st.fragment(run_every=30)
+# ----------------- 로그인 전 전용: 실시간 주가 순환 컴포넌트 -----------------
 def render_live_dashboard():
     # 병목현상 차단을 위해 오직 3대 대표 시장 지수만 고정 표출 (코스피, 나스닥, S&P 500)
     indices = [
