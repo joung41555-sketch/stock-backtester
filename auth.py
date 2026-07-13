@@ -104,51 +104,66 @@ def dispatch_email(to_email, subject, html_body, demo_fallback_value):
     # 모든 활성 계정이 발송에 실패한 경우
     return False, f"등록된 모든 발송 메일 계정의 시도가 실패했습니다. 마지막 오류: {last_error}"
 
+_DB_INIT_DONE = False  # 매 rerun마다 파일 I/O를 반복하지 않도록 프로세스 내 1회만 초기화
+
 def init_db():
     """데이터베이스 초기화 및 테이블 생성, 필요한 컬럼 마이그레이션 (SQLite용 예비 엔진)"""
+    global _DB_INIT_DONE
     if USE_SUPABASE:
         return  # Supabase 모드 사용 시 SQLite 초기화 건너뜀
-        
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # 회원 테이블 생성
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # 세션 자동 로그인 테이블 생성
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL
-        )
-    """)
-    
-    # 실시간 보유 자산 영구 보관 테이블 생성 (계정별 고유 자산)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_portfolios (
-            username TEXT,
-            ticker TEXT,
-            buy_price REAL,
-            shares REAL,
-            PRIMARY KEY (username, ticker)
-        )
-    """)
-    
-    # 이메일 컬럼(email)이 존재하는지 확인하고 없으면 자동 생성 (마이그레이션)
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if 'email' not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
-        
-    conn.commit()
-    conn.close()
+    if _DB_INIT_DONE:
+        return
+
+    # 🔧 여기서 예외가 나면 예전엔 앱 전체가 매 rerun마다 크래시 → 무한 재시작 루프로 보였음.
+    # 실패해도 앱은 계속 뜨게 하고, 화면에 원인을 보여주도록 변경.
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # 회원 테이블 생성
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 세션 자동 로그인 테이블 생성
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL
+            )
+        """)
+
+        # 실시간 보유 자산 영구 보관 테이블 생성 (계정별 고유 자산)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_portfolios (
+                username TEXT,
+                ticker TEXT,
+                buy_price REAL,
+                shares REAL,
+                PRIMARY KEY (username, ticker)
+            )
+        """)
+
+        # 이메일 컬럼(email)이 존재하는지 확인하고 없으면 자동 생성 (마이그레이션)
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'email' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
+
+        conn.commit()
+        conn.close()
+        _DB_INIT_DONE = True
+    except Exception as e:
+        try:
+            st.error(f"⚠️ 로컬 DB 초기화 실패 (DB_PATH: {DB_PATH}): {e}")
+        except Exception:
+            pass
+        # 초기화 실패 시에도 앱이 죽지 않도록 여기서 예외를 삼킴
 
 def hash_password(password):
     """비밀번호에 솔트를 추가하여 SHA-256 해시값 생성"""
